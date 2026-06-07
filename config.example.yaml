@@ -1,0 +1,17 @@
+# bingtangCode 配置
+# 复制此文件为 config.yaml 并填入你的 API Key:
+#   cp config.example.yaml config.yaml
+
+provider: anthropic
+
+# max_tokens: 32768  # 可选，Anthropic 用此值限制输出（默认 32768），OpenAI 忽略此配置
+
+anthropic:
+  api_key: ""
+  model: claude-opus-4-7
+  # endpoint: https://api.anthropic.com/v1/messages  # 可选，默认值
+
+openai:
+  api_key: ""
+  model: gpt-4o
+  # endpoint: https://api.openai.com/v1/chat/completions  # 可选，也支持 Ollama 等兼容接口
