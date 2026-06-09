@@ -15,3 +15,6 @@ openai:
   api_key: ""
   model: gpt-4o
   # endpoint: https://api.openai.com/v1/chat/completions  # 可选，也支持 Ollama 等兼容接口
+
+# tool:
+#   timeout_seconds: 30  # 可选，工具执行超时上限（秒），默认 30

@@ -6,7 +6,14 @@ import com.bingtangcode.core.SessionManager;
 import com.bingtangcode.llm.LLMProvider;
 import com.bingtangcode.llm.LLMimpl.AnthropicProvider;
 import com.bingtangcode.llm.LLMimpl.OpenAIProvider;
+import com.bingtangcode.tool.Tool;
+import com.bingtangcode.tool.ToolExecutor;
+import com.bingtangcode.tool.ToolRegistry;
+import com.bingtangcode.tool.tools.*;
 import com.bingtangcode.tui.TerminalIO;
+
+import java.nio.file.Path;
+import java.util.List;
 
 public class Main {
 
@@ -18,6 +25,7 @@ public class Main {
     public static void main(String[] args) {
         try {
             ConfigManager config = new ConfigManager();
+            Path projectRoot = Path.of("").toAbsolutePath();
 
             LLMProvider provider;
             Runnable cancelAction;
@@ -49,15 +57,40 @@ public class Main {
                 return;
             }
 
-            DialogueManager dialogue = new DialogueManager(
-                    buildSystemPrompt(providerName, modelName));
             TerminalIO terminalIO = new TerminalIO();
             terminalIO.setModelName(modelName);
+
+            // --- 工具系统装配 ---
+            // 1. 注册中心 + 六个工具
+            ToolRegistry toolRegistry = new ToolRegistry();
+            toolRegistry.register(new ReadFileTool(projectRoot));
+            toolRegistry.register(new WriteFileTool(projectRoot));
+            toolRegistry.register(new EditFileTool(projectRoot));
+            // ExecuteCommandTool 注入确认回调——执行前弹出 TUI 确认框
+            toolRegistry.register(new ExecuteCommandTool(projectRoot, terminalIO::confirmCommand));
+            toolRegistry.register(new FindFilesTool(projectRoot));
+            toolRegistry.register(new SearchContentTool(projectRoot));
+
+            // 2. 工具执行器（超时控制）
+            ToolExecutor toolExecutor = new ToolExecutor(config.getToolTimeoutSeconds());
+            List<Tool> toolList = toolRegistry.getAll();
+
+            System.out.println("已注册 " + toolList.size() + " 个工具: "
+                    + toolList.stream().map(Tool::getName).toList());
+
+            // 3. 对话管理器注入工具能力
+            DialogueManager dialogue = new DialogueManager(
+                    buildSystemPrompt(providerName, modelName),
+                    toolRegistry, toolExecutor, toolList);
+
+            // --- 启动 ---
             SessionManager session = new SessionManager(
                     terminalIO, dialogue, provider, cancelAction);
             session.start();
 
+            // --- 清理 ---
             provider.shutdown();
+            toolExecutor.shutdown();
             terminalIO.shutdown();
         } catch (Exception e) {
             System.err.println("程序异常: " + e.getMessage());

@@ -17,6 +17,7 @@ public class ConfigManager {
     private static final String DEFAULT_ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
     private static final String DEFAULT_OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
     private static final int DEFAULT_MAX_TOKENS = 32768;
+    private static final int DEFAULT_TOOL_TIMEOUT = 30;
 
     private final String provider;
     private final String anthropicApiKey;
@@ -26,7 +27,7 @@ public class ConfigManager {
     private final String openAiModel;
     private final String openAiEndpoint;
     private final int maxTokens;
-
+    private final int toolTimeout;
     @SuppressWarnings("unchecked")
     public ConfigManager() {
         if (!Files.exists(CONFIG_PATH)) {
@@ -56,6 +57,9 @@ public class ConfigManager {
         this.openAiEndpoint = getString(openai, "endpoint", DEFAULT_OPENAI_ENDPOINT);
 
         this.maxTokens = getInt(root, "max_tokens", DEFAULT_MAX_TOKENS);
+
+        Map<String, Object> tool = getMap(root, "tool");
+        this.toolTimeout = getInt(tool, "timeout_seconds", DEFAULT_TOOL_TIMEOUT);
 
         if ("anthropic".equals(provider) && anthropicApiKey.isBlank()) {
             System.err.println("错误: 请在 " + CONFIG_PATH.toAbsolutePath() + " 中设置 anthropic.api_key");
@@ -147,5 +151,9 @@ public class ConfigManager {
 
     public int getMaxTokens() {
         return maxTokens;
+    }
+
+    public int getToolTimeoutSeconds() {
+        return toolTimeout;
     }
 }

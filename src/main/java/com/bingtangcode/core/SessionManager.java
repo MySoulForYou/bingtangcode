@@ -6,6 +6,8 @@ import com.bingtangcode.tui.TerminalIO;
 
 import java.nio.file.Paths;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 
 public class SessionManager {
 
@@ -22,6 +24,16 @@ public class SessionManager {
         this.cancelAction = cancelAction;
     }
 
+    /**
+     * 主循环：读输入 → 发请求 → 等结果 → 循环。
+     *
+     * 线程分工：
+     *   主线程（这里）:      读输入，发 streamChat，latch.await() 阻塞等待
+     *   provider 读流线程:   跑 SSE 解析，回调 onToken/onToolCall/onComplete
+     *   tool-executor 线程:  工具超时执行（仅在模型调用工具时启动）
+     *
+     * latch 用于主线程等待 provider 线程完成——onComplete 或 onError 时 countDown。
+     */
     public void start() {
         printWelcome();
 
@@ -48,22 +60,25 @@ public class SessionManager {
             dialogue.addUserMessage(input);
             terminalIO.printAssistantPrefix();
 
+            // latch 同步主线程和 provider 线程：
+            // 主线程在这里 latch.await() 阻塞
+            // provider 线程在 onComplete/onError 时 latch.countDown() 唤醒主线程
             CountDownLatch latch = new CountDownLatch(1);
-            boolean[] interrupted = {false};
-
+            AtomicBoolean interrupted = new AtomicBoolean(false);
             terminalIO.setInterruptHandler(() -> {
-                interrupted[0] = true;
+                interrupted.set(true);
                 cancelAction.run();
             });
 
             dialogue.streamResponse(provider, new StreamCallback() {
                 @Override
                 public void onToken(String token) {
-                    terminalIO.printToken(token);
+                    terminalIO.printToken(token);  // 逐字流式打印到终端
                 }
 
                 @Override
                 public void onComplete() {
+                    // 所有回合结束（可能是纯文本 or 工具调用往返），唤醒主线程
                     terminalIO.newline();
                     terminalIO.newline();
                     latch.countDown();
@@ -71,7 +86,7 @@ public class SessionManager {
 
                 @Override
                 public void onError(Exception e) {
-                    if (interrupted[0]) {
+                    if (interrupted.get()) {
                         terminalIO.printInterrupted();
                     } else {
                         terminalIO.newline();
@@ -82,6 +97,8 @@ public class SessionManager {
                 }
             });
 
+            // streamResponse 已返回（异步提交了任务到 provider 线程），
+            // 主线程在这里等待直到 provider 线程完成所有工作
             try {
                 latch.await();
             } catch (InterruptedException e) {

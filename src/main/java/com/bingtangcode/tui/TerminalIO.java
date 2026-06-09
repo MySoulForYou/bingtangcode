@@ -11,6 +11,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 public class TerminalIO {
 
@@ -22,6 +26,7 @@ public class TerminalIO {
     private static final String BOLD = "\033[1m";
 
     private static final String CLAUDE_CORAL = "\033[38;5;173m";
+    private static final String YELLOW_BOLD = "\033[1;33m";
 
     private static final Path HISTORY_PATH = Paths.get(
             System.getProperty("user.home"), ".bingtangcode", "history");
@@ -42,6 +47,12 @@ public class TerminalIO {
     private boolean inWelcome = false;
     private String welcomeProvider = null;
     private String welcomeWorkDir = null;
+
+    private final ExecutorService confirmExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "confirm-reader");
+        t.setDaemon(true);
+        return t;
+    });
 
     public TerminalIO() {
         try {
@@ -147,13 +158,44 @@ public class TerminalIO {
         System.out.println();
     }
 
+    /**
+     * 命令确认对话框。高亮显示命令文本，用户输入 y/N，10 秒无输入自动拒绝。
+     * @return true=确认执行，false=拒绝
+     */
+    public boolean confirmCommand(String command) {
+        System.out.println();
+        System.out.println(GRAY + TL + HLINE.repeat(Math.min(command.length() + 20, getWidth() - 2)) + TR + RESET);
+        System.out.println(GRAY + VLINE + " " + YELLOW_BOLD + "将执行命令:" + RESET);
+        System.out.println(GRAY + VLINE + " " + RESET + command);
+        System.out.println(GRAY + BL + HLINE.repeat(Math.min(command.length() + 20, getWidth() - 2)) + BR + RESET);
+        System.out.print(GRAY + "  [y/N] " + RESET);
+        System.out.flush();
+
+        Future<String> future = confirmExecutor.submit(() -> reader.readLine());
+        try {
+            String input = future.get(10, TimeUnit.SECONDS);
+            boolean confirmed = input != null && input.trim().equalsIgnoreCase("y");
+            if (!confirmed) {
+                System.out.println(GRAY + "  已取消" + RESET);
+            }
+            return confirmed;
+        } catch (java.util.concurrent.TimeoutException e) {
+            future.cancel(true);
+            System.out.println(GRAY + "  超时，已自动取消" + RESET);
+            return false;
+        } catch (Exception e) {
+            System.out.println(GRAY + "  已取消" + RESET);
+            return false;
+        }
+    }
+
     public String readLine(String prompt) throws UserInterruptException {
         System.out.println();
 
         while (true) {
             int w = getWidth() - 2;
 
-            // 在输入前画完整输入框：上边 + 空行(含左右边框) + 下边
+            // 输入框：上边 + 空行 + 下边
             drawInputTop();
             System.out.println(GRAY + VLINE + " " + RESET + " ".repeat(Math.max(0, w - 1)) + GRAY + VLINE + RESET);
             System.out.print(GRAY + BL + HLINE.repeat(Math.max(0, w)) + BR + RESET);
@@ -170,58 +212,22 @@ public class TerminalIO {
 
             String trimmedFirst = line.trim();
 
-            // 空输入：擦除整个框，重新等待
             if (trimmedFirst.isEmpty()) {
                 System.out.print("\033[3A\033[J");
                 continue;
             }
 
-            // 本地命令仅在首行生效
             if (trimmedFirst.startsWith("/") && handleLocalCommand(trimmedFirst)) {
                 System.out.print("\033[J");
                 drawInputBottom();
                 continue;
             }
 
-            // 行末 \ 续行
-            if (!line.endsWith("\\")) {
-                System.out.print("\033[J");
-                drawInputBottom();
-                int inputTokens = 200 + (line.length() / 4);
-                totalTokens += inputTokens;
-                return line;
-            }
-
-            // 多行输入模式
-            StringBuilder sb = new StringBuilder();
-            sb.append(line, 0, line.length() - 1);
-
-            String contPrompt = GRAY + VLINE + "  " + RESET;
-
-            while (true) {
-                String contLine = reader.readLine(contPrompt);
-
-                if (contLine == null) {
-                    System.out.print("\033[J");
-                    drawInputBottom();
-                    int inputTokens = 200 + (sb.length() / 4);
-                    totalTokens += inputTokens;
-                    return sb.toString();
-                }
-
-                if (contLine.endsWith("\\")) {
-                    sb.append("\n").append(contLine, 0, contLine.length() - 1);
-                } else {
-                    sb.append("\n").append(contLine);
-                    break;
-                }
-            }
-
             System.out.print("\033[J");
             drawInputBottom();
-            int inputTokens = 200 + (sb.length() / 4);
+            int inputTokens = 200 + (line.length() / 4);
             totalTokens += inputTokens;
-            return sb.toString();
+            return line;
         }
     }
 
@@ -349,6 +355,7 @@ public class TerminalIO {
     }
 
     public void shutdown() {
+        confirmExecutor.shutdownNow();
         try {
             terminal.close();
         } catch (IOException ignored) {
