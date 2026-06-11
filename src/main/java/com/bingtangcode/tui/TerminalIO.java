@@ -95,6 +95,10 @@ public class TerminalIO {
         this.modelName = name;
     }
 
+    public void setTotalTokens(int tokens) {
+        this.totalTokens = tokens;
+    }
+
     private void drawInputTop() {
         int w = getWidth() - 2;
         System.out.println(GRAY + TL + HLINE.repeat(Math.max(0, w)) + TR + RESET);
@@ -286,7 +290,7 @@ public class TerminalIO {
         }
 
         String[] infoLines = new String[3];
-        infoLines[0] = BOLD + "bingtangCode v0.1.0" + RESET;
+        infoLines[0] = BOLD + "bingtangCode v0.3.0" + RESET;
         infoLines[1] = GRAY + provider + " · " + workDir + RESET;
         infoLines[2] = GRAY + "Type /help for options" + RESET;
 
@@ -336,6 +340,13 @@ public class TerminalIO {
         totalTokens += Math.max(1, token.length() / 4);
         System.out.print(token);
         System.out.flush();
+    }
+
+    /** 只累计 token 计数，不打印。用于 thinking/reasoning 等已有独立渲染的流 */
+    public void countToken(String token) {
+        if (token != null && !token.isEmpty()) {
+            totalTokens += Math.max(1, token.length() / 4);
+        }
     }
 
     public void printError(String text) {

@@ -18,6 +18,11 @@ public class ReadFileTool implements Tool {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String getName() {
         return "read_file";
     }

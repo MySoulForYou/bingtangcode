@@ -1,5 +1,7 @@
 package com.bingtangcode;
 
+import com.bingtangcode.agent.AgentLoop;
+import com.bingtangcode.agent.EventBus;
 import com.bingtangcode.config.ConfigManager;
 import com.bingtangcode.core.DialogueManager;
 import com.bingtangcode.core.SessionManager;
@@ -11,6 +13,7 @@ import com.bingtangcode.tool.ToolExecutor;
 import com.bingtangcode.tool.ToolRegistry;
 import com.bingtangcode.tool.tools.*;
 import com.bingtangcode.tui.TerminalIO;
+import com.bingtangcode.tui.TuiEventListener;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -19,7 +22,13 @@ public class Main {
 
     private static String buildSystemPrompt(String providerName, String modelName) {
         return "你是 bingtangCode，一个终端 AI 编程助手。底层由 " + providerName
-                + " 驱动，当前模型为 " + modelName + "。请帮助用户解决编程问题，回答使用中文。";
+                + " 驱动，当前模型为 " + modelName + "。请帮助用户解决编程问题，回答使用中文。\n"
+                + "\n"
+                + "工具调用规则：\n"
+                + "- 只读工具（read_file、find_files、search_content）互不干扰，可以同一轮并发调用。\n"
+                + "- 副作用工具（write_file、edit_file、execute_command）会修改文件系统，系统会串行执行。\n"
+                + "- 同一轮返回的多个工具调用视为互不依赖。如果你需要\"先创建再验证\"、\"先修改再编译\"，"
+                + "请分两轮：第一轮写，第二轮读或测试。";
     }
 
     public static void main(String[] args) {
@@ -61,31 +70,37 @@ public class Main {
             terminalIO.setModelName(modelName);
 
             // --- 工具系统装配 ---
-            // 1. 注册中心 + 六个工具
             ToolRegistry toolRegistry = new ToolRegistry();
             toolRegistry.register(new ReadFileTool(projectRoot));
             toolRegistry.register(new WriteFileTool(projectRoot));
             toolRegistry.register(new EditFileTool(projectRoot));
-            // ExecuteCommandTool 注入确认回调——执行前弹出 TUI 确认框
             toolRegistry.register(new ExecuteCommandTool(projectRoot, terminalIO::confirmCommand));
             toolRegistry.register(new FindFilesTool(projectRoot));
             toolRegistry.register(new SearchContentTool(projectRoot));
 
-            // 2. 工具执行器（超时控制）
             ToolExecutor toolExecutor = new ToolExecutor(config.getToolTimeoutSeconds());
             List<Tool> toolList = toolRegistry.getAll();
 
             System.out.println("已注册 " + toolList.size() + " 个工具: "
                     + toolList.stream().map(Tool::getName).toList());
 
-            // 3. 对话管理器注入工具能力
+            // --- 对话管理器 ---
             DialogueManager dialogue = new DialogueManager(
                     buildSystemPrompt(providerName, modelName),
                     toolRegistry, toolExecutor, toolList);
 
+            // --- 事件总线 ---
+            EventBus eventBus = new EventBus();
+            eventBus.subscribe(new TuiEventListener(terminalIO));
+
+            // --- Agent Loop ---
+            AgentLoop agentLoop = new AgentLoop(
+                    dialogue, provider, toolRegistry,
+                    eventBus, config.getMaxIterations());
+
             // --- 启动 ---
             SessionManager session = new SessionManager(
-                    terminalIO, dialogue, provider, cancelAction);
+                    terminalIO, agentLoop, cancelAction);
             session.start();
 
             // --- 清理 ---

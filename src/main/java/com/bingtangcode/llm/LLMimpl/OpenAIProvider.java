@@ -194,6 +194,9 @@ public class OpenAIProvider implements LLMProvider {
             StringBuilder reasoningBuf = new StringBuilder();
             boolean reasoningDone = false;
 
+            int inputTokens = 0;
+            int outputTokens = 0;
+
             String line;
             while ((line = reader.readLine()) != null) {
                 if (!line.startsWith("data: ")) {
@@ -202,11 +205,19 @@ public class OpenAIProvider implements LLMProvider {
                 String data = line.substring(6);
 
                 if ("[DONE]".equals(data.trim())) {
+                    callback.onUsage(inputTokens, outputTokens);
                     callback.onComplete();
                     return;
                 }
 
                 Map<String, Object> event = objectMapper.readValue(data, Map.class);
+
+                Map<String, Object> usage = (Map<String, Object>) event.get("usage");
+                if (usage != null) {
+                    if (usage.get("prompt_tokens") instanceof Number n) inputTokens = n.intValue();
+                    if (usage.get("completion_tokens") instanceof Number n) outputTokens = n.intValue();
+                }
+
                 List<Map<String, Object>> choices = (List<Map<String, Object>>) event.get("choices");
                 if (choices == null || choices.isEmpty()) {
                     continue;
@@ -221,7 +232,6 @@ public class OpenAIProvider implements LLMProvider {
                 if (finishReason != null) {
                     if (!reasoningDone && !reasoningBuf.isEmpty()) {
                         lastReasoning = reasoningBuf.toString();
-                        System.out.println("\033[90m── 思考结束 ──\033[0m");
                     }
                     if ("tool_calls".equals(finishReason)) {
                         // 按 index 升序逐个回调——先收集的工具先回调
@@ -242,6 +252,7 @@ public class OpenAIProvider implements LLMProvider {
                             }
                         }
                     }
+                    callback.onUsage(inputTokens, outputTokens);
                     callback.onComplete();
                     return;
                 }
@@ -251,11 +262,11 @@ public class OpenAIProvider implements LLMProvider {
                     continue;
                 }
 
-                // 思考过程：灰色流式展示
+                // 思考过程
                 String reasoning = (String) delta.get("reasoning_content");
                 if (reasoning != null && !reasoning.isEmpty()) {
                     reasoningBuf.append(reasoning);
-                    System.out.print("\033[90m" + reasoning + "\033[0m");
+                    callback.onReasoning(reasoning);
                 }
 
                 // 文本增量
@@ -264,7 +275,6 @@ public class OpenAIProvider implements LLMProvider {
                     if (!reasoningDone && !reasoningBuf.isEmpty()) {
                         reasoningDone = true;
                         lastReasoning = reasoningBuf.toString();
-                        System.out.println("\033[90m── 思考结束 ──\033[0m");
                     }
                     callback.onToken(text);
                 }

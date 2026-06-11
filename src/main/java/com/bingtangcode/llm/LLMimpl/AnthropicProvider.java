@@ -232,6 +232,9 @@ public class AnthropicProvider implements LLMProvider {
             Map<Integer, String> toolUseNames = new HashMap<>();
             Map<Integer, StringBuilder> toolUseJson = new HashMap<>();
 
+            int inputTokens = 0;
+            int outputTokens = 0;
+
             String line;
             while ((line = reader.readLine()) != null) {
                 if (!line.startsWith("data: ")) {
@@ -242,33 +245,63 @@ public class AnthropicProvider implements LLMProvider {
                 Map<String, Object> event = objectMapper.readValue(data, Map.class);
                 String type = (String) event.get("type");
 
-                if ("content_block_start".equals(type)) {
+                if ("message_start".equals(type)) {
+                    Map<String, Object> message = (Map<String, Object>) event.get("message");
+                    if (message != null) {
+                        Map<String, Object> usage = (Map<String, Object>) message.get("usage");
+                        if (usage != null && usage.get("input_tokens") instanceof Number n) {
+                            inputTokens = n.intValue();
+                        }
+                    }
+                } else if ("content_block_start".equals(type)) {
                     Map<String, Object> contentBlock = (Map<String, Object>) event.get("content_block");
-                    if (contentBlock != null && "tool_use".equals(contentBlock.get("type"))) {
-                        int index = ((Number) event.get("index")).intValue();
-                        toolUseIds.put(index, (String) contentBlock.get("id"));
-                        toolUseNames.put(index, (String) contentBlock.get("name"));
-                        toolUseJson.put(index, new StringBuilder());
+                    if (contentBlock != null) {
+                        String blockType = (String) contentBlock.get("type");
+                        if ("tool_use".equals(blockType)) {
+                            int index = ((Number) event.get("index")).intValue();
+                            toolUseIds.put(index, (String) contentBlock.get("id"));
+                            toolUseNames.put(index, (String) contentBlock.get("name"));
+                            toolUseJson.put(index, new StringBuilder());
+                        } else if ("thinking".equals(blockType)) {
+                            String thinking = (String) contentBlock.get("thinking");
+                            if (thinking != null && !thinking.isEmpty()) {
+                                callback.onReasoning(thinking);
+                            }
+                        }
                     }
                 } else if ("content_block_delta".equals(type)) {
                     int index = ((Number) event.get("index")).intValue();
                     Map<String, Object> delta = (Map<String, Object>) event.get("delta");
                     if (delta != null) {
-                        if ("text_delta".equals(delta.get("type"))) {
+                        String deltaType = (String) delta.get("type");
+                        if ("text_delta".equals(deltaType)) {
                             String text = (String) delta.get("text");
                             if (text != null && !text.isEmpty()) {
                                 callback.onToken(text);
                             }
-                        } else if ("input_json_delta".equals(delta.get("type"))) {
+                        } else if ("input_json_delta".equals(deltaType)) {
                             String json = (String) delta.get("partial_json");
                             if (json != null) {
                                 StringBuilder sb = toolUseJson.get(index);
                                 if (sb != null) sb.append(json);
                             }
+                        } else if ("thinking_delta".equals(deltaType)) {
+                            String thinking = (String) delta.get("thinking");
+                            if (thinking != null && !thinking.isEmpty()) {
+                                callback.onReasoning(thinking);
+                            }
+                        } else if ("signature_delta".equals(deltaType)) {
+                            String signature = (String) delta.get("signature");
+                            if (signature != null && !signature.isEmpty()) {
+                                callback.onReasoning(signature);
+                            }
                         }
                     }
                 } else if ("message_delta".equals(type)) {
-                    // stop_reason 仅在 message_delta 中携带，标记此信息用于日志等用途
+                    Map<String, Object> usage = (Map<String, Object>) event.get("usage");
+                    if (usage != null && usage.get("output_tokens") instanceof Number n) {
+                        outputTokens = n.intValue();
+                    }
                 } else if ("message_stop".equals(type)) {
                     // 按 index 顺序逐个回调 onToolCall
                     for (int i = 0; i < toolUseIds.size(); i++) {
@@ -287,6 +320,7 @@ public class AnthropicProvider implements LLMProvider {
                             }
                         }
                     }
+                    callback.onUsage(inputTokens, outputTokens);
                     callback.onComplete();
                     return;
                 }

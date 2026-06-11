@@ -23,6 +23,11 @@ public class FindFilesTool implements Tool {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String getName() {
         return "find_files";
     }

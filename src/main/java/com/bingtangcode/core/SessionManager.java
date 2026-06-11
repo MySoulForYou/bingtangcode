@@ -1,39 +1,23 @@
 package com.bingtangcode.core;
 
-import com.bingtangcode.llm.LLMProvider;
-import com.bingtangcode.llm.StreamCallback;
+import com.bingtangcode.agent.AgentLoop;
 import com.bingtangcode.tui.TerminalIO;
 
 import java.nio.file.Paths;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 
 public class SessionManager {
 
     private final TerminalIO terminalIO;
-    private final DialogueManager dialogue;
-    private final LLMProvider provider;
+    private final AgentLoop agentLoop;
     private final Runnable cancelAction;
 
-    public SessionManager(TerminalIO terminalIO, DialogueManager dialogue,
-                          LLMProvider provider, Runnable cancelAction) {
+    public SessionManager(TerminalIO terminalIO, AgentLoop agentLoop, Runnable cancelAction) {
         this.terminalIO = terminalIO;
-        this.dialogue = dialogue;
-        this.provider = provider;
+        this.agentLoop = agentLoop;
         this.cancelAction = cancelAction;
     }
 
-    /**
-     * 主循环：读输入 → 发请求 → 等结果 → 循环。
-     *
-     * 线程分工：
-     *   主线程（这里）:      读输入，发 streamChat，latch.await() 阻塞等待
-     *   provider 读流线程:   跑 SSE 解析，回调 onToken/onToolCall/onComplete
-     *   tool-executor 线程:  工具超时执行（仅在模型调用工具时启动）
-     *
-     * latch 用于主线程等待 provider 线程完成——onComplete 或 onError 时 countDown。
-     */
     public void start() {
         printWelcome();
 
@@ -57,54 +41,27 @@ public class SessionManager {
                 continue;
             }
 
-            dialogue.addUserMessage(input);
+            if ("/plan".equals(input)) {
+                agentLoop.setMode(AgentLoop.Mode.PLAN);
+                System.out.println("\033[90m已切换到 Plan Mode，仅可用只读工具\033[0m");
+                continue;
+            }
+            if ("/do".equals(input)) {
+                agentLoop.setMode(AgentLoop.Mode.FULL);
+                System.out.println("\033[90m已切换到 Do Mode，全工具可用\033[0m");
+                continue;
+            }
+
             terminalIO.printAssistantPrefix();
 
-            // latch 同步主线程和 provider 线程：
-            // 主线程在这里 latch.await() 阻塞
-            // provider 线程在 onComplete/onError 时 latch.countDown() 唤醒主线程
-            CountDownLatch latch = new CountDownLatch(1);
-            AtomicBoolean interrupted = new AtomicBoolean(false);
             terminalIO.setInterruptHandler(() -> {
-                interrupted.set(true);
+                agentLoop.cancel();
                 cancelAction.run();
             });
 
-            dialogue.streamResponse(provider, new StreamCallback() {
-                @Override
-                public void onToken(String token) {
-                    terminalIO.printToken(token);  // 逐字流式打印到终端
-                }
+            agentLoop.run(input);
 
-                @Override
-                public void onComplete() {
-                    // 所有回合结束（可能是纯文本 or 工具调用往返），唤醒主线程
-                    terminalIO.newline();
-                    terminalIO.newline();
-                    latch.countDown();
-                }
-
-                @Override
-                public void onError(Exception e) {
-                    if (interrupted.get()) {
-                        terminalIO.printInterrupted();
-                    } else {
-                        terminalIO.newline();
-                        terminalIO.printError(e.getMessage());
-                    }
-                    terminalIO.newline();
-                    latch.countDown();
-                }
-            });
-
-            // streamResponse 已返回（异步提交了任务到 provider 线程），
-            // 主线程在这里等待直到 provider 线程完成所有工作
-            try {
-                latch.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+            terminalIO.setInterruptHandler(null);
         }
 
         terminalIO.shutdown();
@@ -114,8 +71,8 @@ public class SessionManager {
         String workDir = shortenPath(Paths.get("").toAbsolutePath().toString());
 
         terminalIO.printTopBorder();
-        terminalIO.printBorderLine("  /) /)  bingtangCode v0.1.0");
-        terminalIO.printBorderLine(" ( T_T)  " + provider.getName() + " · " + workDir);
+        terminalIO.printBorderLine("  /) /)  bingtangCode v0.3.0");
+        terminalIO.printBorderLine(" ( T_T)  " + workDir);
         terminalIO.printBorderLine(" c(\")(\") /help 查看帮助  ·  /exit 退出");
         terminalIO.printBottomBorder();
         System.out.println();

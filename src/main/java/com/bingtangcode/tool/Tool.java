@@ -24,4 +24,9 @@ public interface Tool {
 
     /** 执行工具，params 为模型填的参数。返回 ToolResult（成功或失败），由 ToolExecutor 包装超时/异常 */
     ToolResult execute(Map<String, Object> params);
+
+    /** 是否为只读工具。只读工具在 Agent Loop 中可并发执行，副作用工具需串行。默认 false */
+    default boolean isReadOnly() {
+        return false;
+    }
 }
