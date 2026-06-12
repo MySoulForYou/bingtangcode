@@ -5,6 +5,9 @@ import com.bingtangcode.agent.EventBus;
 import com.bingtangcode.config.ConfigManager;
 import com.bingtangcode.core.DialogueManager;
 import com.bingtangcode.core.SessionManager;
+import com.bingtangcode.core.SystemPromptBuilder;
+import com.bingtangcode.core.SystemPromptBuilder.EnvInfo;
+import com.bingtangcode.core.SystemReminderManager;
 import com.bingtangcode.llm.LLMProvider;
 import com.bingtangcode.llm.LLMimpl.AnthropicProvider;
 import com.bingtangcode.llm.LLMimpl.OpenAIProvider;
@@ -15,20 +18,61 @@ import com.bingtangcode.tool.tools.*;
 import com.bingtangcode.tui.TerminalIO;
 import com.bingtangcode.tui.TuiEventListener;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Properties;
+import java.util.stream.Collectors;
 
 public class Main {
 
-    private static String buildSystemPrompt(String providerName, String modelName) {
-        return "你是 bingtangCode，一个终端 AI 编程助手。底层由 " + providerName
-                + " 驱动，当前模型为 " + modelName + "。请帮助用户解决编程问题，回答使用中文。\n"
-                + "\n"
-                + "工具调用规则：\n"
-                + "- 只读工具（read_file、find_files、search_content）互不干扰，可以同一轮并发调用。\n"
-                + "- 副作用工具（write_file、edit_file、execute_command）会修改文件系统，系统会串行执行。\n"
-                + "- 同一轮返回的多个工具调用视为互不依赖。如果你需要\"先创建再验证\"、\"先修改再编译\"，"
-                + "请分两轮：第一轮写，第二轮读或测试。";
+    private static String loadVersion() {
+        try (InputStream in = Main.class.getResourceAsStream("/version.properties")) {
+            if (in != null) {
+                Properties props = new Properties();
+                props.load(in);
+                String v = props.getProperty("version");
+                if (v != null && !v.isBlank() && !v.startsWith("$")) {
+                    return v;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "0.0.0";
+    }
+
+    private static EnvInfo buildEnvInfo(Path projectRoot) {
+        String workDir = projectRoot.toAbsolutePath().toString();
+        String platform = System.getProperty("os.name", "未知");
+        String shell = System.getenv("SHELL");
+        if (shell == null || shell.isEmpty()) {
+            shell = "未知";
+        }
+        String osVersion = System.getProperty("os.version", "未知");
+        String date = LocalDate.now().toString();
+        String gitStatus = getGitStatus(projectRoot);
+        return new EnvInfo(workDir, platform, shell, osVersion, date, gitStatus);
+    }
+
+    private static String getGitStatus(Path projectRoot) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("git", "status");
+            pb.directory(projectRoot.toFile());
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String result = reader.lines().collect(Collectors.joining("\n"));
+                process.waitFor();
+                if (process.exitValue() == 0) {
+                    return result;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "未知";
     }
 
     public static void main(String[] args) {
@@ -56,7 +100,8 @@ public class Main {
                         config.getOpenAiApiKey(),
                         modelName,
                         config.getOpenAiEndpoint(),
-                        config.getMaxTokens());
+                        config.getMaxTokens(),
+                        config.getShowReasoning());
                 provider = op;
                 cancelAction = op::cancel;
             } else {
@@ -68,6 +113,7 @@ public class Main {
 
             TerminalIO terminalIO = new TerminalIO();
             terminalIO.setModelName(modelName);
+            terminalIO.setVersion(loadVersion());
 
             // --- 工具系统装配 ---
             ToolRegistry toolRegistry = new ToolRegistry();
@@ -85,8 +131,10 @@ public class Main {
                     + toolList.stream().map(Tool::getName).toList());
 
             // --- 对话管理器 ---
+            SystemPromptBuilder promptBuilder = new SystemPromptBuilder();
+            EnvInfo envInfo = buildEnvInfo(projectRoot);
             DialogueManager dialogue = new DialogueManager(
-                    buildSystemPrompt(providerName, modelName),
+                    promptBuilder.build(providerName, modelName, envInfo),
                     toolRegistry, toolExecutor, toolList);
 
             // --- 事件总线 ---
@@ -94,9 +142,10 @@ public class Main {
             eventBus.subscribe(new TuiEventListener(terminalIO));
 
             // --- Agent Loop ---
+            SystemReminderManager reminderManager = new SystemReminderManager();
             AgentLoop agentLoop = new AgentLoop(
                     dialogue, provider, toolRegistry,
-                    eventBus, config.getMaxIterations());
+                    eventBus, config.getMaxIterations(), reminderManager);
 
             // --- 启动 ---
             SessionManager session = new SessionManager(

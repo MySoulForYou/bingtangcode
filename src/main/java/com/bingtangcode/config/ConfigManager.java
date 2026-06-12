@@ -19,6 +19,7 @@ public class ConfigManager {
     private static final int DEFAULT_MAX_TOKENS = 32768;
     private static final int DEFAULT_TOOL_TIMEOUT = 30;
     private static final int DEFAULT_MAX_ITERATIONS = 20;
+    private static final boolean DEFAULT_SHOW_REASONING = true;
 
     private final String provider;
     private final String anthropicApiKey;
@@ -30,6 +31,7 @@ public class ConfigManager {
     private final int maxTokens;
     private final int toolTimeout;
     private final int maxIterations;
+    private final boolean showReasoning;
     @SuppressWarnings("unchecked")
     public ConfigManager() {
         if (!Files.exists(CONFIG_PATH)) {
@@ -65,6 +67,8 @@ public class ConfigManager {
 
         Map<String, Object> agent = getMap(root, "agent");
         this.maxIterations = getInt(agent, "max_iterations", DEFAULT_MAX_ITERATIONS);
+
+        this.showReasoning = getBool(root, "show_reasoning", DEFAULT_SHOW_REASONING);
 
         if ("anthropic".equals(provider) && anthropicApiKey.isBlank()) {
             System.err.println("错误: 请在 " + CONFIG_PATH.toAbsolutePath() + " 中设置 anthropic.api_key");
@@ -164,5 +168,20 @@ public class ConfigManager {
 
     public int getMaxIterations() {
         return maxIterations;
+    }
+
+    public boolean getShowReasoning() {
+        return showReasoning;
+    }
+
+    private static boolean getBool(Map<String, Object> map, String key, boolean defaultValue) {
+        Object value = map != null ? map.get(key) : null;
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof String s) {
+            return "true".equalsIgnoreCase(s.trim());
+        }
+        return defaultValue;
     }
 }

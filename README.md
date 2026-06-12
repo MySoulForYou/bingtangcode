@@ -8,18 +8,30 @@
 
 - 支持多 LLM provider（Anthropic / OpenAI），通过配置文件切换
 - ReAct Agent Loop：模型自主思考→调工具→观察结果→再思考，多轮循环直到任务完成
-- 流式输出，AI 回复逐字呈现，工具调用实时可见
+- 结构化系统提示：7 模块按职责组装，稳定内容走 SYSTEM 可缓存，动态内容走消息通道
+- Plan Mode 运行时注入：通过 `<system-reminder>` 标签按轮次注入模式提醒，控制频率和详略
+- 流式输出，AI 回复逐字呈现，推理过程可配置显示
 - 六个核心工具：读文件、写文件、编辑文件、执行命令、搜索文件、搜索内容
 - 事件驱动架构，模块完全解耦
 - Java 21，终端原生体验
 
 ## 当前进度
 
-**v0.3 — Agent Loop** 已完成：
+**v0.4 — 系统提示工程** 已完成：
 
 | 模块 | 说明 |
 |------|------|
-| LLM 抽象层 | `LLMProvider` 统一接口，`AnthropicProvider` + `OpenAIProvider` 双实现 |
+| SystemPromptBuilder | 7 个固定模块按优先级组装（身份→系统约束→任务模式→动作执行→工具使用→语气风格→文本输出）+ 环境信息，稳定指令可缓存 |
+| SystemReminderManager | Plan 模式提醒按 Agent Loop 轮次注入，首轮完整 + 每 3 轮重复 + 其余精简，`/do` 停止注入 |
+| AgentLoop 集成 | 每轮 doRound 前注入提醒，模式切换时通知，`<system-reminder>` 消息不走 API 缓存前缀 |
+| 工具描述双重强化 | EditFileTool + WriteFileTool 描述中追加关键约束，与系统提示互补 |
+| 推理显示可配置 | `show_reasoning` 配置项控制是否灰显推理过程，false 时静默跳过 |
+| 版本号软编码 | pom.xml 定义版本，Maven 资源过滤注入，启动时读取显示 |
+
+### v0.3 — Agent Loop
+
+| 模块 | 说明 |
+|------|------|
 | Agent Loop | `AgentLoop` ReAct 循环，模型自主多轮调工具，20 轮上限 + 5 种停止条件 |
 | 事件总线 | `EventBus` + 8 种 `AgentEvent`，AgentLoop/DialogueManager 发事件，TUI 订阅消费 |
 | Plan Mode | `/plan` 切换只读工具集（调研模式），`/do` 恢复全量工具（执行模式） |
@@ -29,11 +41,10 @@
 | 流式双路收集 | `DialogueManager.doRound()` 内部一边推 EventBus 渲染终端，一边积攒写历史 |
 | Token 用量追踪 | 流式实时累计 + 每轮 API 精确修正，终端底部状态栏显示 |
 | 对话编排 | `DialogueManager` 管理历史，`doRound()` 封装 LLM 调用→收集→工具执行→写历史 |
-| 终端 IO | JLine3 行编辑 + 历史翻找 + 命令确认对话框 + 工具进度实时显示 |
 
-### Out of Scope（v0.3 不做）
+### Out of Scope（当前不做）
 
-上下文压缩、对话持久化、权限系统、工具执行沙箱、跨会话记忆、MCP 集成、代码高亮、Markdown 渲染、多会话切换
+上下文压缩、对话持久化、权限系统、工具执行沙箱、跨会话记忆、MCP 集成、代码高亮、Markdown 渲染、多会话切换、项目指令文件加载、自动记忆、自动化评估
 
 ## 效果预览
 
@@ -78,7 +89,9 @@ cp config.example.yaml config.yaml
 编辑 `config.yaml`，填入你的 API Key：
 
 ```yaml
-provider: anthropic          # 或 openai
+provider: anthropic              # 或 openai
+
+# show_reasoning: true          # 可选，是否显示推理/思考过程，默认 true
 
 anthropic:
   api_key: "sk-ant-xxxxx"
@@ -87,9 +100,10 @@ anthropic:
 openai:
   api_key: "sk-xxxxx"
   model: gpt-4o
+  # endpoint: https://api.openai.com/v1/chat/completions  # 可选，也支持 DeepSeek 等兼容接口
 
 agent:
-  max_iterations: 20         # Agent Loop 最大迭代次数
+  max_iterations: 20             # Agent Loop 最大迭代次数
 ```
 
 ### 运行
@@ -111,13 +125,15 @@ java -jar target/bingtangcode-0.3.0.jar
 
 ```
 src/main/java/com/bingtangcode/
-├── Main.java                    # 入口，组装所有组件 + system prompt
+├── Main.java                    # 入口，组装所有组件
 ├── config/
-│   └── ConfigManager.java       # YAML 配置读取（含 maxIterations）
+│   └── ConfigManager.java       # YAML 配置读取（含 showReasoning）
 ├── core/
 │   ├── SessionManager.java      # REPL 主循环，解析 /plan /do /exit
 │   ├── DialogueManager.java     # 对话历史 + doRound() 单轮执行
-│   └── RoundResult.java         # doRound 返回结果
+│   ├── RoundResult.java         # doRound 返回结果
+│   ├── SystemPromptBuilder.java # 7 模块系统提示组装 + EnvInfo
+│   └── SystemReminderManager.java  # Plan 模式提醒频率控制（N=3）
 ├── agent/
 │   ├── AgentLoop.java           # ReAct 循环控制器
 │   ├── AgentEvent.java          # 8 种事件类型定义
@@ -130,7 +146,7 @@ src/main/java/com/bingtangcode/
 │   ├── StreamCallback.java      # 流式回调（含 onToolCall/onReasoning/onUsage）
 │   └── LLMimpl/
 │       ├── AnthropicProvider.java   # Claude API + thinking SSE 解析
-│       └── OpenAIProvider.java      # GPT API + reasoning SSE 解析
+│       └── OpenAIProvider.java      # GPT API + reasoning SSE 解析（含 showReasoning）
 ├── tool/
 │   ├── Tool.java                # 工具接口（name/description/schema/execute/isReadOnly）
 │   ├── ToolCall.java            # 一次工具调用
@@ -139,21 +155,21 @@ src/main/java/com/bingtangcode/
 │   ├── ToolExecutor.java        # 超时执行器（Future.get 30s）
 │   └── tools/
 │       ├── ReadFileTool.java         # 读文件（isReadOnly=true）
-│       ├── WriteFileTool.java        # 写文件
-│       ├── EditFileTool.java         # 精确文本替换
+│       ├── WriteFileTool.java        # 写文件（含优先 edit 提醒）
+│       ├── EditFileTool.java         # 精确文本替换（含先读后改提醒）
 │       ├── ExecuteCommandTool.java   # 执行 shell 命令（含确认对话框）
 │       ├── FindFilesTool.java        # glob 搜索文件（isReadOnly=true）
 │       └── SearchContentTool.java    # grep 搜索内容（isReadOnly=true）
 └── tui/
-    ├── TerminalIO.java          # 终端输入输出（JLine3 + ANSI）
-    ├── TuiEventListener.java    # 事件→终端渲染翻译器
+    ├── TerminalIO.java          # 终端输入输出（JLine3 + ANSI，版本号软编码）
+    ├── TuiEventListener.java    # 事件→终端渲染翻译器（推理→文本自动换行）
     └── BuddyManager.java        # Buddy 管理
 ```
 
 ## 技术栈
 
 - **语言**: Java 21
-- **构建**: Maven + maven-shade-plugin（fat jar）
+- **构建**: Maven + maven-shade-plugin（fat jar）+ Maven 资源过滤
 - **终端**: JLine3（行编辑、历史、信号处理）
 - **HTTP**: OkHttp 4
 - **JSON/YAML**: Jackson

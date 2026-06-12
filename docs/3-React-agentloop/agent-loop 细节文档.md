@@ -575,3 +575,14 @@ StreamCallback.onToken("好")
 ### 为什么不能合并
 
 如果让 `terminalIO.printToken` 直接负责积攒，TuiEventListener 就必须暴露"取文本"的方法给 DialogueManager——两个模块就耦合了。保持分离，TuiEventListener 只管渲染，DialogueManager 只管业务。
+
+
+### 怎么知道是 plan 模式的？
+
+根据代码分析，当前 bingtangCode 中 LLM 并不知道自己在 plan 模式。机制是纯工具过滤：
+
+1. AgentLoop.selectTools() 在 plan 模式下只返回 isReadOnly() == true 的工具（read_file、find_files、search_content）
+2. 这些工具直接传给 API 的 tools 参数，写工具根本不出现在请求中
+3. 系统提示词是静态的，不包含任何"当前处于 plan 模式"的信息
+
+对比 Claude Code 的做法：它会向消息列表注入一条系统消息，明确告知模型当前处于 plan 模式、只能做研究和规划、不能写代码。

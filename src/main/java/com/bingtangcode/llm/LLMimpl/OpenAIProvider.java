@@ -29,6 +29,7 @@ public class OpenAIProvider implements LLMProvider {
     private final String model;
     private final String endpoint;
     private final int maxTokens;
+    private final boolean showReasoning;
     private volatile boolean cancelled;
     private volatile Response activeResponse;
     volatile String lastReasoning; // 最近一次思考全文，供外部展开查看
@@ -37,11 +38,12 @@ public class OpenAIProvider implements LLMProvider {
     private final ObjectMapper objectMapper;
     private final ExecutorService executor;
 
-    public OpenAIProvider(String apiKey, String model, String endpoint, int maxTokens) {
+    public OpenAIProvider(String apiKey, String model, String endpoint, int maxTokens, boolean showReasoning) {
         this.apiKey = apiKey;
         this.model = model;
         this.endpoint = endpoint;
         this.maxTokens = maxTokens;
+        this.showReasoning = showReasoning;
         this.httpClient = new OkHttpClient();
         this.objectMapper = new ObjectMapper();
         this.executor = Executors.newSingleThreadExecutor(r -> {
@@ -262,11 +264,14 @@ public class OpenAIProvider implements LLMProvider {
                     continue;
                 }
 
-                // 思考过程
+                // 思考过程（show_reasoning=true 时灰显，false 时静默丢弃）
                 String reasoning = (String) delta.get("reasoning_content");
                 if (reasoning != null && !reasoning.isEmpty()) {
-                    reasoningBuf.append(reasoning);
-                    callback.onReasoning(reasoning);
+                    if (showReasoning) {
+                        reasoningBuf.append(reasoning);
+                        callback.onReasoning(reasoning);
+                    }
+                    // showReasoning=false → 不输出，静默跳过
                 }
 
                 // 文本增量

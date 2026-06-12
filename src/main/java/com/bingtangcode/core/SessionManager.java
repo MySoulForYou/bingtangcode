@@ -71,7 +71,7 @@ public class SessionManager {
         String workDir = shortenPath(Paths.get("").toAbsolutePath().toString());
 
         terminalIO.printTopBorder();
-        terminalIO.printBorderLine("  /) /)  bingtangCode v0.3.0");
+        terminalIO.printBorderLine("  /) /)  bingtangCode");
         terminalIO.printBorderLine(" ( T_T)  " + workDir);
         terminalIO.printBorderLine(" c(\")(\") /help 查看帮助  ·  /exit 退出");
         terminalIO.printBottomBorder();

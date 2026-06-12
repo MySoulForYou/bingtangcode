@@ -11,6 +11,7 @@ public class TuiEventListener implements AgentEventListener {
     private static final String RESET = "\033[0m";
 
     private final TerminalIO terminalIO;
+    private boolean reasoningActive;
 
     public TuiEventListener(TerminalIO terminalIO) {
         this.terminalIO = terminalIO;
@@ -18,12 +19,19 @@ public class TuiEventListener implements AgentEventListener {
 
     @Override
     public void onTextDelta(AgentEvent.TextDelta event) {
+        if (reasoningActive) {
+            System.out.println();
+            reasoningActive = false;
+        }
         terminalIO.printToken(event.token());
     }
 
     @Override
     public void onReasoningDelta(AgentEvent.ReasoningDelta event) {
         terminalIO.countToken(event.token());
+        if (!reasoningActive) {
+            reasoningActive = true;
+        }
         System.out.print(GRAY + event.token() + RESET);
         System.out.flush();
     }

@@ -16,6 +16,8 @@ openai:
   model: gpt-4o
   # endpoint: https://api.openai.com/v1/chat/completions  # 可选，也支持 Ollama 等兼容接口
 
+# show_reasoning: true  # 可选，是否显示模型的思考/推理过程，默认 true。设为 false 则推理内容以普通文本显示
+
 # tool:
 #   timeout_seconds: 30  # 可选，工具执行超时上限（秒），默认 30
 

@@ -2,7 +2,10 @@ package com.bingtangcode.agent;
 
 import com.bingtangcode.core.DialogueManager;
 import com.bingtangcode.core.RoundResult;
+import com.bingtangcode.core.SystemReminderManager;
 import com.bingtangcode.llm.LLMProvider;
+import com.bingtangcode.llm.Message;
+import com.bingtangcode.llm.Role;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolRegistry;
 
@@ -20,18 +23,21 @@ public class AgentLoop {
     private final ToolRegistry toolRegistry;
     private final EventBus bus;
     private final int maxIterations;
+    private final SystemReminderManager reminderManager;
 
     private Mode mode = Mode.FULL;
     private volatile boolean cancelled;
     private int unknownToolStreak;
 
     public AgentLoop(DialogueManager dialogue, LLMProvider provider,
-                     ToolRegistry toolRegistry, EventBus bus, int maxIterations) {
+                     ToolRegistry toolRegistry, EventBus bus, int maxIterations,
+                     SystemReminderManager reminderManager) {
         this.dialogue = dialogue;
         this.provider = provider;
         this.toolRegistry = toolRegistry;
         this.bus = bus;
         this.maxIterations = maxIterations;
+        this.reminderManager = reminderManager;
     }
 
     public void run(String userInput) {
@@ -51,6 +57,8 @@ public class AgentLoop {
             long iterStart = System.currentTimeMillis();
             bus.fire(new AgentEvent.LoopIterationStarted(iteration));
 
+            injectReminder();
+
             RoundResult result = runRoundWithRetry(totalInputTokens, totalOutputTokens);
             if (result == null) {
                 bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.STREAM_ERROR));
@@ -58,6 +66,7 @@ public class AgentLoop {
             }
 
             bus.fire(new AgentEvent.LoopIterationEnded(iteration, System.currentTimeMillis() - iterStart));
+            reminderManager.onRoundComplete();
 
             if (result.completed()) {
                 bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.COMPLETED));
@@ -79,12 +88,20 @@ public class AgentLoop {
         bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.MAX_ITERATIONS));
     }
 
+    private void injectReminder() {
+        String reminder = reminderManager.getReminder();
+        if (reminder != null) {
+            dialogue.addMessage(new Message(Role.USER, reminder));
+        }
+    }
+
     public void cancel() {
         cancelled = true;
     }
 
     public void setMode(Mode mode) {
         this.mode = mode;
+        reminderManager.onModeSwitch(mode);
     }
 
     public Mode getMode() {

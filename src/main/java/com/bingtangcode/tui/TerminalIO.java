@@ -43,6 +43,7 @@ public class TerminalIO {
 
     private int totalTokens = 0;
     private String modelName = "";
+    private String appVersion = "";
 
     private boolean inWelcome = false;
     private String welcomeProvider = null;
@@ -93,6 +94,10 @@ public class TerminalIO {
 
     public void setModelName(String name) {
         this.modelName = name;
+    }
+
+    public void setVersion(String version) {
+        this.appVersion = version;
     }
 
     public void setTotalTokens(int tokens) {
@@ -290,7 +295,7 @@ public class TerminalIO {
         }
 
         String[] infoLines = new String[3];
-        infoLines[0] = BOLD + "bingtangCode v0.3.0" + RESET;
+        infoLines[0] = BOLD + "bingtangCode v" + appVersion + RESET;
         infoLines[1] = GRAY + provider + " · " + workDir + RESET;
         infoLines[2] = GRAY + "Type /help for options" + RESET;
 
