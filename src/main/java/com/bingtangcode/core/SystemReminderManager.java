@@ -1,6 +1,6 @@
 package com.bingtangcode.core;
 
-import com.bingtangcode.agent.AgentLoop;
+import com.bingtangcode.permission.PermissionMode;
 
 public class SystemReminderManager {
 
@@ -10,13 +10,13 @@ public class SystemReminderManager {
     private static final String SHORT_REMINDER =
             "<system-reminder>Plan模式：仅可用只读工具</system-reminder>";
 
-    private AgentLoop.Mode currentMode = AgentLoop.Mode.FULL;
+    private PermissionMode currentMode = PermissionMode.DEFAULT;
     private int roundCount = 0;
     private boolean firstRound = false;
 
-    public void onModeSwitch(AgentLoop.Mode mode) {
+    public void onModeSwitch(PermissionMode mode) {
         this.currentMode = mode;
-        if (mode == AgentLoop.Mode.PLAN) {
+        if (mode == PermissionMode.PLAN) {
             this.roundCount = 0;
             this.firstRound = true;
         } else {
@@ -26,7 +26,7 @@ public class SystemReminderManager {
     }
 
     public String getReminder() {
-        if (currentMode == AgentLoop.Mode.FULL) {
+        if (currentMode != PermissionMode.PLAN) {
             return null;
         }
         if (firstRound) {

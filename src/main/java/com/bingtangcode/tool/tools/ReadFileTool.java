@@ -1,5 +1,7 @@
 package com.bingtangcode.tool.tools;
 
+import com.bingtangcode.permission.PathSandbox;
+import com.bingtangcode.permission.PathViolationException;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolResult;
 
@@ -60,8 +62,10 @@ public class ReadFileTool implements Tool {
         }
 
         Path resolved = projectRoot.resolve(filePath).normalize();
-        if (!resolved.startsWith(projectRoot)) {
-            return new ToolResult(null, "安全限制: 禁止访问项目目录以外的文件", true);
+        try {
+            PathSandbox.validate(projectRoot, filePath);
+        } catch (PathViolationException e) {
+            return new ToolResult(null, e.getMessage(), true);
         }
         if (!Files.exists(resolved)) {
             return new ToolResult(null, "文件不存在: " + filePath, true);

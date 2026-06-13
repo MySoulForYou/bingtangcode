@@ -1,8 +1,10 @@
 package com.bingtangcode.tui;
 
+import org.jline.keymap.KeyMap;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
+import org.jline.reader.Widget;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.Terminal.Signal;
 import org.jline.terminal.TerminalBuilder;
@@ -48,6 +50,9 @@ public class TerminalIO {
     private boolean inWelcome = false;
     private String welcomeProvider = null;
     private String welcomeWorkDir = null;
+
+    private Runnable shiftTabHandler;
+    private String promptModeLabel = "";
 
     private final ExecutorService confirmExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "confirm-reader");
@@ -100,6 +105,11 @@ public class TerminalIO {
         this.appVersion = version;
     }
 
+    /** 设置输入框内 prompt 左侧的模式标签（如 "Plan"），空字符串表示不显示。 */
+    public void setPromptModeLabel(String label) {
+        this.promptModeLabel = label;
+    }
+
     public void setTotalTokens(int tokens) {
         this.totalTokens = tokens;
     }
@@ -109,9 +119,25 @@ public class TerminalIO {
         System.out.println(GRAY + TL + HLINE.repeat(Math.max(0, w)) + TR + RESET);
     }
 
+    /** 独立绘制状态行（简洁版，启动/模式切换后使用）。 */
+    public void drawStatusBar() {
+        String branch = getGitBranch();
+        StringBuilder sb = new StringBuilder();
+        if (branch != null) {
+            sb.append("  ").append(branch);
+        }
+        sb.append("  ").append(modelName);
+        sb.append("  ").append(totalTokens).append(" tokens");
+        System.out.println(GRAY + sb + RESET);
+    }
+
     private void drawInputBottom() {
         String branch = getGitBranch();
-        String leftPart = branch != null ? " " + branch + " " : "";
+
+        StringBuilder left = new StringBuilder();
+        if (branch != null) {
+            left.append(" ").append(branch).append(" ");
+        }
 
         String tokenStr;
         if (totalTokens >= 1000) {
@@ -121,12 +147,12 @@ public class TerminalIO {
         }
         String rightPart = modelName + " (" + tokenStr + ") ";
 
-        int leftVisual = BuddyManager.getVisualWidth(leftPart);
+        int leftVisual = BuddyManager.getVisualWidth(left.toString());
         int rightVisual = BuddyManager.getVisualWidth(rightPart);
         int w = getWidth() - 2;
         int gap = Math.max(0, w - leftVisual - rightVisual - 2);
 
-        System.out.println(GRAY + BL + HLINE + leftPart + RESET
+        System.out.println(GRAY + BL + HLINE + left + RESET
                 + GRAY + HLINE.repeat(gap) + rightPart + HLINE + BR + RESET);
     }
 
@@ -154,17 +180,47 @@ public class TerminalIO {
     }
 
     private void printHelpCard() {
-        int w = 54;
+        String[] lines = {
+                "  /exit, /quit      退出程序",
+                "  /clear            清除屏幕",
+                "  /help             显示此帮助",
+                "  /plan             进入 Plan 模式（仅只读工具）",
+                "  /do               回到 Default 模式",
+                "  /mode             打开权限模式选择菜单",
+                "  Shift+Tab         循环切换权限模式"
+        };
+        int boxW = 48;
         System.out.println();
-        System.out.println(CYAN + TL + HLINE.repeat(w) + TR + RESET);
-        System.out.println(CYAN + VLINE + " " + RESET + BOLD + BuddyManager.padLine(" BINGTANGCODE 命令帮助", w - 2) + CYAN + " " + VLINE + RESET);
-        System.out.println(CYAN + "├" + HLINE.repeat(w) + "┤" + RESET);
-        System.out.println(CYAN + VLINE + " " + RESET + BuddyManager.padLine("  /exit 或 /quit      退出程序", w - 2) + CYAN + " " + VLINE + RESET);
-        System.out.println(CYAN + VLINE + " " + RESET + BuddyManager.padLine("  /clear             清除屏幕历史", w - 2) + CYAN + " " + VLINE + RESET);
-        System.out.println(CYAN + VLINE + " " + RESET + BuddyManager.padLine("  /buddy             显示当前吉祥物", w - 2) + CYAN + " " + VLINE + RESET);
-        System.out.println(CYAN + VLINE + " " + RESET + BuddyManager.padLine("  /help              显示此帮助信息", w - 2) + CYAN + " " + VLINE + RESET);
-        System.out.println(CYAN + BL + HLINE.repeat(w) + BR + RESET);
+        System.out.println(GRAY + "  ╭" + "─".repeat(boxW) + "╮" + RESET);
+        System.out.println(GRAY + "  │" + RESET + "  " + BOLD + center("命令帮助", boxW) + GRAY + "  │" + RESET);
+        System.out.println(GRAY + "  │" + RESET + "  " + " ".repeat(boxW) + GRAY + "  │" + RESET);
+        for (String line : lines) {
+            System.out.println(GRAY + "  │" + RESET + "  " + line + " ".repeat(Math.max(0, boxW - visualWidth(line))) + GRAY + "  │" + RESET);
+            System.out.flush();
+        }
+        System.out.println(GRAY + "  │" + RESET + "  " + " ".repeat(boxW) + GRAY + "  │" + RESET);
+        System.out.println(GRAY + "  │" + RESET + "  " + GRAY + "按任意键关闭" + " ".repeat(Math.max(0, boxW - visualWidth("按任意键关闭"))) + GRAY + "  │" + RESET);
+        System.out.println(GRAY + "  ╰" + "─".repeat(boxW) + "╯" + RESET);
         System.out.println();
+    }
+
+    private static String center(String s, int width) {
+        int vw = visualWidth(s);
+        int before = (width - vw) / 2;
+        return " ".repeat(Math.max(0, before)) + s;
+    }
+
+    private static int visualWidth(String s) {
+        int len = 0;
+        boolean inAnsi = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inAnsi) { if (c == 'm') inAnsi = false; continue; }
+            if (c == '\033') { inAnsi = true; continue; }
+            if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3000 && c <= 0x303F || c >= 0xFF00 && c <= 0xFFEF) len += 2;
+            else len++;
+        }
+        return len;
     }
 
     /**
@@ -211,7 +267,9 @@ public class TerminalIO {
             System.out.print("\033[1A\r");
             System.out.flush();
 
-            String firstPrompt = GRAY + VLINE + " " + CLAUDE_CORAL + "❯ " + RESET;
+            String modeLabel = !promptModeLabel.isEmpty()
+                    ? promptModeLabel + " " : "";
+            String firstPrompt = GRAY + VLINE + " " + modeLabel + CLAUDE_CORAL + "❯ " + RESET;
             String line = reader.readLine(firstPrompt);
 
             if (line == null) {
@@ -234,8 +292,11 @@ public class TerminalIO {
 
             System.out.print("\033[J");
             drawInputBottom();
-            int inputTokens = 200 + (line.length() / 4);
-            totalTokens += inputTokens;
+            // / 开头的本地命令不发 API，不估 token
+            if (!trimmedFirst.startsWith("/")) {
+                int inputTokens = 200 + (line.length() / 4);
+                totalTokens += inputTokens;
+            }
             return line;
         }
     }
@@ -362,12 +423,80 @@ public class TerminalIO {
         System.out.println();
     }
 
+    /** 读取一行原始输入，不画输入框。用于 /mode 菜单选择等场景。 */
+    public String readRawLine() {
+        try {
+            String line = reader.readLine("");
+            return line != null ? line : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    public void setShiftTabHandler(Runnable action) {
+        this.shiftTabHandler = action;
+        if (action != null) {
+            reader.getKeyMaps().get(LineReader.MAIN).bind(new Widget() {
+                @Override
+                public boolean apply() {
+                    Runnable h = shiftTabHandler;
+                    if (h != null) {
+                        h.run();
+                    }
+                    return true;
+                }
+            }, "\033[Z");
+        }
+    }
+
     public void setInterruptHandler(Runnable action) {
         terminal.handle(Signal.INT, sig -> action.run());
     }
 
     public void printInterrupted() {
         System.out.println(GRAY + "  ^C 终止" + RESET);
+    }
+
+    /**
+     * 读取单个按键。用于人在回路等需要非行编辑输入的场景。
+     * 先用 JLine3 的 enterRawMode 强制无回显模式，读键后不恢复（下次 readLine 会自行设置）。
+     * 返回的字符串：普通字符为单字符 "y"/"1"，方向键为 "UP"/"DOWN"，Enter 为 "ENTER"。
+     */
+    public String readKey() {
+        try {
+            terminal.enterRawMode();
+            var nr = terminal.reader();
+
+            int ch = nr.read();
+            if (ch == -1) return "NONE";
+            if (ch == '\r' || ch == '\n') return "ENTER";
+            if (ch == '\t') return "TAB";
+            if (ch == 27) {
+                int ch2 = nr.read(200);
+                if (ch2 == -1) return "NONE";
+                if (ch2 == '[') {
+                    int ch3 = nr.read(200);
+                    if (ch3 == -1) return "NONE";
+                    return switch (ch3) {
+                        case 'A' -> "UP"; case 'B' -> "DOWN";
+                        case 'C' -> "RIGHT"; case 'D' -> "LEFT";
+                        default -> "NONE";
+                    };
+                }
+                if (ch2 == 'O') {
+                    int ch3 = nr.read(200);
+                    if (ch3 == -1) return "NONE";
+                    return switch (ch3) {
+                        case 'A' -> "UP"; case 'B' -> "DOWN";
+                        default -> "NONE";
+                    };
+                }
+                return "NONE";
+            }
+            return String.valueOf((char) ch);
+        } catch (Exception e) {
+            return "NONE";
+        }
     }
 
     public void shutdown() {

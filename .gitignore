@@ -4,3 +4,4 @@ target/
 *.jar
 .idea/
 *.iml
+.bingtangcode/permissions.local.yaml

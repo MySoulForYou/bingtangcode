@@ -6,17 +6,17 @@ import com.bingtangcode.core.SystemReminderManager;
 import com.bingtangcode.llm.LLMProvider;
 import com.bingtangcode.llm.Message;
 import com.bingtangcode.llm.Role;
+import com.bingtangcode.permission.PermissionMode;
+import com.bingtangcode.permission.PermissionModeProvider;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolRegistry;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class AgentLoop {
+public class AgentLoop implements PermissionModeProvider {
 
     private static final int MAX_STREAM_RETRIES = 3;
-
-    public enum Mode { PLAN, FULL }
 
     private final DialogueManager dialogue;
     private final LLMProvider provider;
@@ -25,19 +25,23 @@ public class AgentLoop {
     private final int maxIterations;
     private final SystemReminderManager reminderManager;
 
-    private Mode mode = Mode.FULL;
+    private static final int MAX_PERMISSION_DENIED_STREAK = 5;
+
+    private PermissionMode mode = PermissionMode.DEFAULT;
     private volatile boolean cancelled;
     private int unknownToolStreak;
+    private int permissionDeniedStreak;
 
     public AgentLoop(DialogueManager dialogue, LLMProvider provider,
                      ToolRegistry toolRegistry, EventBus bus, int maxIterations,
-                     SystemReminderManager reminderManager) {
+                     SystemReminderManager reminderManager, PermissionMode initialMode) {
         this.dialogue = dialogue;
         this.provider = provider;
         this.toolRegistry = toolRegistry;
         this.bus = bus;
         this.maxIterations = maxIterations;
         this.reminderManager = reminderManager;
+        this.mode = initialMode;
     }
 
     public void run(String userInput) {
@@ -61,7 +65,11 @@ public class AgentLoop {
 
             RoundResult result = runRoundWithRetry(totalInputTokens, totalOutputTokens);
             if (result == null) {
-                bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.STREAM_ERROR));
+                if (cancelled) {
+                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.CANCELLED));
+                } else {
+                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.STREAM_ERROR));
+                }
                 return;
             }
 
@@ -83,6 +91,16 @@ public class AgentLoop {
             }
 
             unknownToolStreak = 0;
+
+            if (result.allPermissionDenied()) {
+                permissionDeniedStreak++;
+                if (permissionDeniedStreak >= MAX_PERMISSION_DENIED_STREAK) {
+                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.PERMISSION_DENIED_LOOP));
+                    return;
+                }
+            } else {
+                permissionDeniedStreak = 0;
+            }
         }
 
         bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.MAX_ITERATIONS));
@@ -99,18 +117,23 @@ public class AgentLoop {
         cancelled = true;
     }
 
-    public void setMode(Mode mode) {
+    public void setMode(PermissionMode mode) {
         this.mode = mode;
         reminderManager.onModeSwitch(mode);
     }
 
-    public Mode getMode() {
+    public PermissionMode getMode() {
+        return mode;
+    }
+
+    @Override
+    public PermissionMode getCurrentMode() {
         return mode;
     }
 
     private List<Tool> selectTools() {
         List<Tool> all = toolRegistry.getAll();
-        if (mode == Mode.PLAN) {
+        if (mode == PermissionMode.PLAN) {
             return all.stream().filter(Tool::isReadOnly).toList();
         }
         return all;

@@ -6,6 +6,8 @@ import com.bingtangcode.llm.LLMProvider;
 import com.bingtangcode.llm.Message;
 import com.bingtangcode.llm.Role;
 import com.bingtangcode.llm.StreamCallback;
+import com.bingtangcode.permission.PermissionGate;
+import com.bingtangcode.permission.PermissionResult;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolCall;
 import com.bingtangcode.tool.ToolExecutor;
@@ -27,19 +29,26 @@ public class DialogueManager {
     private final List<Message> history;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
+    private volatile PermissionGate permissionGate;
     private final ExecutorService batchExecutor;
 
     public DialogueManager(String systemPrompt, ToolRegistry toolRegistry,
-                           ToolExecutor toolExecutor, List<Tool> tools) {
+                           ToolExecutor toolExecutor, PermissionGate permissionGate,
+                           List<Tool> tools) {
         this.history = new ArrayList<>();
         this.history.add(new Message(Role.SYSTEM, systemPrompt));
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
+        this.permissionGate = permissionGate;
         this.batchExecutor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "dialogue-batch-tool");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    public void setPermissionGate(PermissionGate gate) {
+        this.permissionGate = gate;
     }
 
     public void addUserMessage(String content) {
@@ -129,9 +138,22 @@ public class DialogueManager {
 
         history.add(new Message(Role.ASSISTANT, textBuilder.toString(), pendingToolCalls, List.of()));
         List<ToolResult> results = executeToolBatch(pendingToolCalls, eventBus);
+
+        // 检查是否本轮所有工具调用都被权限拒绝
+        boolean allPermissionDenied = !pendingToolCalls.isEmpty() && !results.isEmpty();
+        if (allPermissionDenied) {
+            for (ToolResult r : results) {
+                if (r.content() == null || !r.content().startsWith("权限拒绝")) {
+                    allPermissionDenied = false;
+                    break;
+                }
+            }
+        }
+
         history.add(new Message(Role.USER, "", List.of(), results));
 
-        return new RoundResult(false, pendingToolCalls, textBuilder.toString(), hasUnknown);
+        return new RoundResult(false, pendingToolCalls, textBuilder.toString(),
+                hasUnknown, allPermissionDenied);
     }
 
     public List<Message> buildApiMessages() {
@@ -209,6 +231,19 @@ public class DialogueManager {
         ToolResult result;
         if (tool == null) {
             result = new ToolResult(tc.id(), "未找到工具: " + tc.name(), true);
+        } else if (permissionGate != null) {
+            PermissionResult pr = permissionGate.check(tc);
+            if (!pr.allowed()) {
+                String friendlyName = com.bingtangcode.permission.ToolFriendlyName.friendlyName(tc.name());
+                String mainParam = com.bingtangcode.permission.ToolFriendlyName.extractMainParam(tc.name(), tc.parameters());
+                String errorMsg = "权限拒绝: " + friendlyName
+                        + (mainParam != null ? "(" + mainParam + ")" : "")
+                        + " 被 " + (pr.reason() != null ? pr.reason() : "权限规则") + " 拦截\n"
+                        + "  匹配规则: " + (pr.matchedRule() != null ? pr.matchedRule() : "无");
+                result = new ToolResult(tc.id(), errorMsg, true);
+            } else {
+                result = toolExecutor.execute(tool, tc.id(), tc.parameters());
+            }
         } else {
             result = toolExecutor.execute(tool, tc.id(), tc.parameters());
         }

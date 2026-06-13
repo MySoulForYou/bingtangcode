@@ -1,5 +1,7 @@
 package com.bingtangcode.tool.tools;
 
+import com.bingtangcode.permission.PathSandbox;
+import com.bingtangcode.permission.PathViolationException;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolResult;
 
@@ -57,8 +59,10 @@ filePath 相对于项目根目录，会被规范化——写入会拒绝 ../ 路
         }
 
         Path resolved = projectRoot.resolve(filePath).normalize();
-        if (!resolved.startsWith(projectRoot)) {
-            return new ToolResult(null, "安全限制: 禁止访问项目目录以外的文件", true);
+        try {
+            PathSandbox.validate(projectRoot, filePath);
+        } catch (PathViolationException e) {
+            return new ToolResult(null, e.getMessage(), true);
         }
         if (Files.isDirectory(resolved)) {
             return new ToolResult(null, "目标路径是一个目录: " + filePath, true);

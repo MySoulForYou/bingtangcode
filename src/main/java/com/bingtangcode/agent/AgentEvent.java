@@ -36,6 +36,7 @@ public sealed interface AgentEvent {
         public static final String MAX_ITERATIONS = "MAX_ITERATIONS";
         public static final String CANCELLED = "CANCELLED";
         public static final String UNKNOWN_TOOL_LOOP = "UNKNOWN_TOOL_LOOP";
+        public static final String PERMISSION_DENIED_LOOP = "PERMISSION_DENIED_LOOP";
         public static final String STREAM_ERROR = "STREAM_ERROR";
     }
 }

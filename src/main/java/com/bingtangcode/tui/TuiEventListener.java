@@ -67,6 +67,8 @@ public class TuiEventListener implements AgentEventListener {
             terminalIO.printInterrupted();
         } else if (AgentEvent.AgentFinished.UNKNOWN_TOOL_LOOP.equals(reason)) {
             System.out.println(GRAY + "  ⚠ 连续调用未知工具，已停止" + RESET);
+        } else if (AgentEvent.AgentFinished.PERMISSION_DENIED_LOOP.equals(reason)) {
+            System.out.println(GRAY + "  ⚠ 连续5轮工具调用被权限拒绝，已停止" + RESET);
         } else if (AgentEvent.AgentFinished.STREAM_ERROR.equals(reason)) {
             System.out.println(GRAY + "  ⚠ 网络请求失败，已重试3次仍无法恢复" + RESET);
         }

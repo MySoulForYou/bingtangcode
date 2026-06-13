@@ -7,6 +7,12 @@
   <version>0.4.0</version>
   <description>终端 AI 编程助手</description>
   <build>
+    <resources>
+      <resource>
+        <filtering>true</filtering>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>

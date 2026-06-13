@@ -1,0 +1,62 @@
+# 项目共享权限配置（可提交 Git，团队共享）
+# 优先级：local > project > user
+
+defaultMode: default
+
+rules:
+  # --- Bash 命令 ---
+
+  # 允许所有 git 命令（git push --force main/master 仍被黑名单拦截）
+  - tool: Bash
+    pattern: "git *"
+    action: allow
+
+  # 允许 Maven 构建命令
+  - tool: Bash
+    pattern: "mvn *"
+    action: allow
+
+  # 允许 npm/npx 命令
+  - tool: Bash
+    pattern: "npm *"
+    action: allow
+  - tool: Bash
+    pattern: "npx *"
+    action: allow
+
+  # --- 文件读写 ---
+
+  # 禁止读取敏感配置（即使项目内有也不要让 AI 读）
+  - tool: Read
+    pattern: ".env"
+    action: deny
+  - tool: Read
+    pattern: ".env.*"
+    action: deny
+  - tool: Read
+    pattern: "*.properties"
+    action: deny
+
+  # 允许编辑 src 下所有 Java 文件
+  - tool: Write
+    pattern: "src/**/*.java"
+    action: allow
+  - tool: Edit
+    pattern: "src/**/*.java"
+    action: allow
+
+  # 允许编辑所有 .md 文档
+  - tool: Write
+    pattern: "*.md"
+    action: allow
+  - tool: Edit
+    pattern: "*.md"
+    action: allow
+
+  # 允许写/编辑 pom.xml
+  - tool: Write
+    pattern: "pom.xml"
+    action: allow
+  - tool: Edit
+    pattern: "pom.xml"
+    action: allow

@@ -1,5 +1,7 @@
 package com.bingtangcode.tool.tools;
 
+import com.bingtangcode.permission.PathSandbox;
+import com.bingtangcode.permission.PathViolationException;
 import com.bingtangcode.tool.Tool;
 import com.bingtangcode.tool.ToolResult;
 
@@ -64,8 +66,10 @@ public class SearchContentTool implements Tool {
         String dir = (String) params.get("directory");
         Path searchRoot = (dir != null && !dir.isBlank()) ? projectRoot.resolve(dir) : projectRoot;
         Path normalizedRoot = searchRoot.normalize();
-        if (!normalizedRoot.startsWith(projectRoot)) {
-            return new ToolResult(null, "安全限制: 禁止访问项目目录以外的文件", true);
+        try {
+            PathSandbox.validate(projectRoot, dir != null && !dir.isBlank() ? dir : ".");
+        } catch (PathViolationException e) {
+            return new ToolResult(null, e.getMessage(), true);
         }
 
         String filePattern = (String) params.get("filePattern");
