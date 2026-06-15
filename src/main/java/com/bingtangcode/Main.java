@@ -132,6 +132,18 @@ public class Main {
             toolRegistry.register(new FindFilesTool(projectRoot));
             toolRegistry.register(new SearchContentTool(projectRoot));
 
+            // --- MCP 客户端装配 ---
+            com.bingtangcode.mcp.McpManager mcpManager = com.bingtangcode.mcp.McpManager.start(config);
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    mcpManager.close();
+                } catch (Exception ignored) {}
+            }, "mcp-cleanup"));
+
+            for (Tool mcpTool : mcpManager.getTools()) {
+                toolRegistry.register(mcpTool);
+            }
+
             ToolExecutor toolExecutor = new ToolExecutor(config.getToolTimeoutSeconds());
             List<Tool> toolList = toolRegistry.getAll();
 

@@ -32,33 +32,52 @@ public class ConfigManager {
     private final int toolTimeout;
     private final int maxIterations;
     private final boolean showReasoning;
+    private final Map<String, McpServerConfig> mcpServers = new java.util.LinkedHashMap<>();
+
     @SuppressWarnings("unchecked")
     public ConfigManager() {
-        if (!Files.exists(CONFIG_PATH)) {
+        Path userConfigPath = Paths.get(System.getProperty("user.home"), ".bingtangcode", "config.yaml");
+        boolean userExists = Files.exists(userConfigPath);
+        boolean projectExists = Files.exists(CONFIG_PATH);
+
+        if (!userExists && !projectExists) {
             printGuideAndExit();
         }
 
-        Map<String, Object> root;
-        try (InputStream in = Files.newInputStream(CONFIG_PATH)) {
-            ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
-            root = mapper.readValue(in, Map.class);
-        } catch (IOException e) {
-            System.err.println("错误: 无法解析配置文件 " + CONFIG_PATH.toAbsolutePath() + ": " + e.getMessage());
-            System.exit(1);
-            throw new RuntimeException("unreachable");
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        Map<String, Object> userRoot = Map.of();
+        Map<String, Object> projectRoot = Map.of();
+
+        if (userExists) {
+            try (InputStream in = Files.newInputStream(userConfigPath)) {
+                userRoot = mapper.readValue(in, Map.class);
+            } catch (IOException e) {
+                System.err.println("[警告] 无法解析用户全局配置文件 " + userConfigPath.toAbsolutePath() + ": " + e.getMessage());
+            }
         }
+
+        if (projectExists) {
+            try (InputStream in = Files.newInputStream(CONFIG_PATH)) {
+                projectRoot = mapper.readValue(in, Map.class);
+            } catch (IOException e) {
+                System.err.println("[警告] 无法解析项目配置文件 " + CONFIG_PATH.toAbsolutePath() + ": " + e.getMessage());
+            }
+        }
+
+        // 深度合并配置：项目配置覆盖用户配置
+        Map<String, Object> root = deepMerge(userRoot, projectRoot);
 
         this.provider = getString(root, "provider", "");
 
         Map<String, Object> anthropic = getMap(root, "anthropic");
-        this.anthropicApiKey = getString(anthropic, "api_key", "");
+        this.anthropicApiKey = EnvExpander.expand(getString(anthropic, "api_key", ""));
         this.anthropicModel = getString(anthropic, "model", "claude-opus-4-7");
-        this.anthropicEndpoint = getString(anthropic, "endpoint", DEFAULT_ANTHROPIC_ENDPOINT);
+        this.anthropicEndpoint = EnvExpander.expand(getString(anthropic, "endpoint", DEFAULT_ANTHROPIC_ENDPOINT));
 
         Map<String, Object> openai = getMap(root, "openai");
-        this.openAiApiKey = getString(openai, "api_key", "");
+        this.openAiApiKey = EnvExpander.expand(getString(openai, "api_key", ""));
         this.openAiModel = getString(openai, "model", "gpt-4o");
-        this.openAiEndpoint = getString(openai, "endpoint", DEFAULT_OPENAI_ENDPOINT);
+        this.openAiEndpoint = EnvExpander.expand(getString(openai, "endpoint", DEFAULT_OPENAI_ENDPOINT));
 
         this.maxTokens = getInt(root, "max_tokens", DEFAULT_MAX_TOKENS);
 
@@ -71,13 +90,115 @@ public class ConfigManager {
         this.showReasoning = getBool(root, "show_reasoning", DEFAULT_SHOW_REASONING);
 
         if ("anthropic".equals(provider) && anthropicApiKey.isBlank()) {
-            System.err.println("错误: 请在 " + CONFIG_PATH.toAbsolutePath() + " 中设置 anthropic.api_key");
+            System.err.println("错误: 请设置 anthropic.api_key");
             System.exit(1);
         }
         if ("openai".equals(provider) && openAiApiKey.isBlank()) {
-            System.err.println("错误: 请在 " + CONFIG_PATH.toAbsolutePath() + " 中设置 openai.api_key");
+            System.err.println("错误: 请设置 openai.api_key");
             System.exit(1);
         }
+
+        // 加载并合并 mcp_servers
+        Map<String, McpServerConfig> userServers = loadMcpServers(userConfigPath);
+        Map<String, McpServerConfig> projectServers = loadMcpServers(CONFIG_PATH);
+
+        this.mcpServers.putAll(userServers);
+        this.mcpServers.putAll(projectServers);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> deepMerge(Map<String, Object> base, Map<String, Object> override) {
+        if (base == null) base = Map.of();
+        if (override == null) override = Map.of();
+        
+        Map<String, Object> merged = new java.util.LinkedHashMap<>(base);
+        for (Map.Entry<String, Object> entry : override.entrySet()) {
+            String key = entry.getKey();
+            Object val = entry.getValue();
+            if (val instanceof Map && merged.get(key) instanceof Map) {
+                merged.put(key, deepMerge((Map<String, Object>) merged.get(key), (Map<String, Object>) val));
+            } else {
+                merged.put(key, val);
+            }
+        }
+        return merged;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, McpServerConfig> loadMcpServers(Path path) {
+        Map<String, McpServerConfig> parsedServers = new java.util.LinkedHashMap<>();
+        if (!Files.exists(path)) {
+            return parsedServers;
+        }
+        try (InputStream in = Files.newInputStream(path)) {
+            ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+            Map<String, Object> root = mapper.readValue(in, Map.class);
+            if (root == null) return parsedServers;
+            Object mcpServersObj = root.get("mcp_servers");
+            if (mcpServersObj instanceof Map) {
+                Map<String, Object> mcpMap = (Map<String, Object>) mcpServersObj;
+                for (Map.Entry<String, Object> entry : mcpMap.entrySet()) {
+                    String serverName = entry.getKey();
+                    if (entry.getValue() instanceof Map) {
+                        try {
+                            McpServerConfig cfg = mapper.convertValue(entry.getValue(), McpServerConfig.class);
+                            if (cfg == null) continue;
+
+                            // 环境变量展开
+                            if (cfg.getEnv() != null) {
+                                java.util.Map<String, String> expandedEnv = new java.util.HashMap<>();
+                                for (Map.Entry<String, String> envEntry : cfg.getEnv().entrySet()) {
+                                    expandedEnv.put(envEntry.getKey(), EnvExpander.expand(envEntry.getValue()));
+                                }
+                                cfg.setEnv(expandedEnv);
+                            }
+                            if (cfg.getHeaders() != null) {
+                                java.util.Map<String, String> expandedHeaders = new java.util.HashMap<>();
+                                for (Map.Entry<String, String> headerEntry : cfg.getHeaders().entrySet()) {
+                                    expandedHeaders.put(headerEntry.getKey(), EnvExpander.expand(headerEntry.getValue()));
+                                }
+                                cfg.setHeaders(expandedHeaders);
+                            }
+
+                            // 校验必填字段
+                            String type = cfg.getType();
+                            if (type == null) {
+                                System.err.println("[错误] MCP Server " + serverName + " 缺少 type 字段");
+                                continue;
+                            }
+                            type = type.toLowerCase();
+                            cfg.setType(type);
+                            if (!"stdio".equals(type) && !"http".equals(type)) {
+                                System.err.println("[错误] MCP Server " + serverName + " 类型非法: " + type);
+                                continue;
+                            }
+                            if ("stdio".equals(type)) {
+                                if (cfg.getCommand() == null || cfg.getCommand().isBlank()) {
+                                    System.err.println("[错误] MCP Server " + serverName + " (stdio) 缺少 command 字段");
+                                    continue;
+                                }
+                            } else {
+                                if (cfg.getUrl() == null || cfg.getUrl().isBlank()) {
+                                    System.err.println("[错误] MCP Server " + serverName + " (http) 缺少 url 字段");
+                                    continue;
+                                }
+                            }
+
+                            parsedServers.put(serverName, cfg);
+                        } catch (Exception e) {
+                            System.err.println("[警告] 无法解析 MCP Server " + serverName + " 的配置: " + e.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[警告] 无法读取配置文件 " + path + ": " + e.getMessage());
+        }
+        return parsedServers;
+    }
+
+    public Map<String, McpServerConfig> getMcpServers() {
+        return mcpServers;
     }
 
     private void printGuideAndExit() {

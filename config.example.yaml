@@ -23,3 +23,14 @@ openai:
 
 agent:
   max_iterations: 20  # 可选，Agent Loop 最大迭代次数，默认 20
+
+
+mcp_servers:
+  context7:
+    type: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@upstash/context7-mcp"
+    env:
+      CONTEXT7_API_KEY: "ctx7sk-Code" # 👈 直接填入你从 Context7 官网获取的 API Key
