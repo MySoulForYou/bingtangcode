@@ -29,8 +29,28 @@ public class ConfigManager {
     private final String openAiModel;
     private final String openAiEndpoint;
     private final int maxTokens;
+    private final int contextWindow;
+    private final int contextSummaryReserve;
+    private final int contextAutoCompressMargin;
+    private final int contextManualCompressMargin;
+    private final int contextKeepRecentTokens;
+    private final int contextKeepRecentMessages;
+    private final int contextMaxCompressFailures;
+    private final double contextCharToTokenRatio;
+
     private final int toolTimeout;
+    private final int toolResultLimit;
+    private final int toolResultTotalLimit;
+    private final int toolResultPreviewLimit;
+    private final int toolResultPreviewLines;
+    private final int toolFindFilesMaxResults;
+
     private final int maxIterations;
+    private final int agentMaxStreamRetries;
+    private final int agentMaxPermissionDeniedStreak;
+
+    private final int mcpTimeoutSeconds;
+
     private final boolean showReasoning;
     private final Map<String, McpServerConfig> mcpServers = new java.util.LinkedHashMap<>();
 
@@ -81,11 +101,36 @@ public class ConfigManager {
 
         this.maxTokens = getInt(root, "max_tokens", DEFAULT_MAX_TOKENS);
 
+        Map<String, Object> contextNode = getMap(root, "context");
+        int parsedWindow = getInt(contextNode, "window", -1);
+        if (parsedWindow > 0) {
+            this.contextWindow = parsedWindow;
+        } else {
+            this.contextWindow = getInt(root, "context_window", 128000);
+        }
+        this.contextSummaryReserve = getInt(contextNode, "summary_reserve", 20000);
+        this.contextAutoCompressMargin = getInt(contextNode, "auto_compress_margin", 13000);
+        this.contextManualCompressMargin = getInt(contextNode, "manual_compress_margin", 3000);
+        this.contextKeepRecentTokens = getInt(contextNode, "keep_recent_tokens", 10000);
+        this.contextKeepRecentMessages = getInt(contextNode, "keep_recent_messages", 5);
+        this.contextMaxCompressFailures = getInt(contextNode, "max_compress_failures", 3);
+        this.contextCharToTokenRatio = getDouble(contextNode, "char_to_token_ratio", 3.5);
+
         Map<String, Object> tool = getMap(root, "tool");
         this.toolTimeout = getInt(tool, "timeout_seconds", DEFAULT_TOOL_TIMEOUT);
+        this.toolResultLimit = getInt(tool, "result_limit", 50000);
+        this.toolResultTotalLimit = getInt(tool, "result_total_limit", 200000);
+        this.toolResultPreviewLimit = getInt(tool, "result_preview_limit", 2048);
+        this.toolResultPreviewLines = getInt(tool, "result_preview_lines", 20);
+        this.toolFindFilesMaxResults = getInt(tool, "find_files_max_results", 200);
 
         Map<String, Object> agent = getMap(root, "agent");
         this.maxIterations = getInt(agent, "max_iterations", DEFAULT_MAX_ITERATIONS);
+        this.agentMaxStreamRetries = getInt(agent, "max_stream_retries", 3);
+        this.agentMaxPermissionDeniedStreak = getInt(agent, "max_permission_denied_streak", 5);
+
+        Map<String, Object> mcp = getMap(root, "mcp");
+        this.mcpTimeoutSeconds = getInt(mcp, "timeout_seconds", 30);
 
         this.showReasoning = getBool(root, "show_reasoning", DEFAULT_SHOW_REASONING);
 
@@ -283,8 +328,20 @@ public class ConfigManager {
         return maxTokens;
     }
 
+    public int getContextWindow() {
+        return contextWindow;
+    }
+
     public int getToolTimeoutSeconds() {
         return toolTimeout;
+    }
+
+    public int getToolResultLimit() {
+        return toolResultLimit;
+    }
+
+    public int getToolResultTotalLimit() {
+        return toolResultTotalLimit;
     }
 
     public int getMaxIterations() {
@@ -293,6 +350,72 @@ public class ConfigManager {
 
     public boolean getShowReasoning() {
         return showReasoning;
+    }
+
+    public int getContextSummaryReserve() {
+        return contextSummaryReserve;
+    }
+
+    public int getContextAutoCompressMargin() {
+        return contextAutoCompressMargin;
+    }
+
+    public int getContextManualCompressMargin() {
+        return contextManualCompressMargin;
+    }
+
+    public int getContextKeepRecentTokens() {
+        return contextKeepRecentTokens;
+    }
+
+    public int getContextKeepRecentMessages() {
+        return contextKeepRecentMessages;
+    }
+
+    public int getContextMaxCompressFailures() {
+        return contextMaxCompressFailures;
+    }
+
+    public double getContextCharToTokenRatio() {
+        return contextCharToTokenRatio;
+    }
+
+    public int getToolResultPreviewLimit() {
+        return toolResultPreviewLimit;
+    }
+
+    public int getToolResultPreviewLines() {
+        return toolResultPreviewLines;
+    }
+
+    public int getToolFindFilesMaxResults() {
+        return toolFindFilesMaxResults;
+    }
+
+    public int getAgentMaxStreamRetries() {
+        return agentMaxStreamRetries;
+    }
+
+    public int getAgentMaxPermissionDeniedStreak() {
+        return agentMaxPermissionDeniedStreak;
+    }
+
+    public int getMcpTimeoutSeconds() {
+        return mcpTimeoutSeconds;
+    }
+
+    private static double getDouble(Map<String, Object> map, String key, double defaultValue) {
+        Object value = map != null ? map.get(key) : null;
+        if (value instanceof Number n) {
+            return n.doubleValue();
+        }
+        if (value instanceof String s) {
+            try {
+                return Double.parseDouble(s.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return defaultValue;
     }
 
     private static boolean getBool(Map<String, Object> map, String key, boolean defaultValue) {

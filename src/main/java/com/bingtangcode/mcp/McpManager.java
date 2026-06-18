@@ -56,12 +56,12 @@ public class McpManager implements AutoCloseable {
                     }
 
                     session = new McpSession(serverName, transport);
-                    // 每一个 Server 初始化最大超时为 30s
-                    session.initialize(30);
+                    // 每一个 Server 初始化最大超时限制
+                    session.initialize(config.getMcpTimeoutSeconds());
 
                     // 成功连接后适配并提取工具
                     for (JsonNode toolNode : session.getTools()) {
-                        McpToolAdapter adapter = McpToolAdapter.create(serverName, toolNode, session);
+                        McpToolAdapter adapter = McpToolAdapter.create(serverName, toolNode, session, config.getMcpTimeoutSeconds());
                         if (adapter != null) {
                             tempTools.add(adapter);
                         }
@@ -78,8 +78,8 @@ public class McpManager implements AutoCloseable {
                 }
             }, connectionExecutor);
 
-            // 限制单个 Server 最长 30 秒超时时间
-            futures.add(future.orTimeout(30, TimeUnit.SECONDS));
+            // 限制单个 Server 最长超时时间
+            futures.add(future.orTimeout(config.getMcpTimeoutSeconds(), TimeUnit.SECONDS));
         }
 
         try {

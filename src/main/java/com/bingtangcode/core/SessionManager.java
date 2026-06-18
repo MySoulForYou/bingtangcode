@@ -72,6 +72,10 @@ public class SessionManager {
                 showModeMenu();
                 continue;
             }
+            if ("/compact".equals(input)) {
+                agentLoop.manualCompress();
+                continue;
+            }
 
             terminalIO.printAssistantPrefix();
 

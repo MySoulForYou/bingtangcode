@@ -26,15 +26,78 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class DialogueManager {
 
+    private final String sessionId;
+    private final int contextWindow;
+    private final int toolResultLimit;
+    private final int toolResultTotalLimit;
+    private final int contextSummaryReserve;
+    private final int contextAutoCompressMargin;
+    private final int contextManualCompressMargin;
+    private final int contextKeepRecentTokens;
+    private final int contextKeepRecentMessages;
+    private final int contextMaxCompressFailures;
+    private final double contextCharToTokenRatio;
+    private final int toolResultPreviewLimit;
+    private final int toolResultPreviewLines;
+
     private final List<Message> history;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
     private volatile PermissionGate permissionGate;
     private final ExecutorService batchExecutor;
 
+    int lastApiInputTokens = 0;
+    int lastApiOutputTokens = 0;
+    int lastApiHistorySize = 0;
+    private int compressFailureCount = 0;
+    private boolean autoCompressEnabled = true;
+
+    // 接收 ConfigManager 的高级构造函数，方便主流程装配
     public DialogueManager(String systemPrompt, ToolRegistry toolRegistry,
                            ToolExecutor toolExecutor, PermissionGate permissionGate,
-                           List<Tool> tools) {
+                           List<Tool> tools, String sessionId, com.bingtangcode.config.ConfigManager config) {
+        this(systemPrompt, toolRegistry, toolExecutor, permissionGate, tools, sessionId,
+             config.getContextWindow(), config.getToolResultLimit(), config.getToolResultTotalLimit(),
+             config.getContextSummaryReserve(), config.getContextAutoCompressMargin(),
+             config.getContextManualCompressMargin(), config.getContextKeepRecentTokens(),
+             config.getContextKeepRecentMessages(), config.getContextMaxCompressFailures(),
+             config.getContextCharToTokenRatio(), config.getToolResultPreviewLimit(),
+             config.getToolResultPreviewLines());
+    }
+
+    // 保留旧构造函数，以实现测试与现有调用链兼容
+    public DialogueManager(String systemPrompt, ToolRegistry toolRegistry,
+                           ToolExecutor toolExecutor, PermissionGate permissionGate,
+                           List<Tool> tools, String sessionId, int contextWindow,
+                           int toolResultLimit, int toolResultTotalLimit) {
+        this(systemPrompt, toolRegistry, toolExecutor, permissionGate, tools, sessionId,
+             contextWindow, toolResultLimit, toolResultTotalLimit,
+             20000, 13000, 3000, 10000, 5, 3, 3.5, 2048, 20);
+    }
+
+    // 全参数构造函数
+    public DialogueManager(String systemPrompt, ToolRegistry toolRegistry,
+                           ToolExecutor toolExecutor, PermissionGate permissionGate,
+                           List<Tool> tools, String sessionId, int contextWindow,
+                           int toolResultLimit, int toolResultTotalLimit,
+                           int contextSummaryReserve, int contextAutoCompressMargin,
+                           int contextManualCompressMargin, int contextKeepRecentTokens,
+                           int contextKeepRecentMessages, int contextMaxCompressFailures,
+                           double contextCharToTokenRatio, int toolResultPreviewLimit,
+                           int toolResultPreviewLines) {
+        this.sessionId = sessionId;
+        this.contextWindow = contextWindow;
+        this.toolResultLimit = toolResultLimit;
+        this.toolResultTotalLimit = toolResultTotalLimit;
+        this.contextSummaryReserve = contextSummaryReserve;
+        this.contextAutoCompressMargin = contextAutoCompressMargin;
+        this.contextManualCompressMargin = contextManualCompressMargin;
+        this.contextKeepRecentTokens = contextKeepRecentTokens;
+        this.contextKeepRecentMessages = contextKeepRecentMessages;
+        this.contextMaxCompressFailures = contextMaxCompressFailures;
+        this.contextCharToTokenRatio = contextCharToTokenRatio;
+        this.toolResultPreviewLimit = toolResultPreviewLimit;
+        this.toolResultPreviewLines = toolResultPreviewLines;
         this.history = new ArrayList<>();
         this.history.add(new Message(Role.SYSTEM, systemPrompt));
         this.toolRegistry = toolRegistry;
@@ -65,6 +128,18 @@ public class DialogueManager {
      */
     public RoundResult doRound(LLMProvider provider, List<Tool> currentTools, EventBus eventBus,
                                AtomicInteger totalInputTokens, AtomicInteger totalOutputTokens) {
+        if (autoCompressEnabled) {
+            int currentEstimate = estimateCurrentTokens();
+            if (currentEstimate >= contextWindow - contextSummaryReserve - contextAutoCompressMargin) {
+                try {
+                    compressHistory(provider, false);
+                } catch (Exception e) {
+                    System.err.println("[系统警告] 自动历史压缩失败，但不影响当前对话继续: " + e.getMessage());
+                }
+            }
+        }
+
+        final int historySizeAtRequest = history.size();
         List<Message> messages = buildApiMessages();
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -91,6 +166,9 @@ public class DialogueManager {
 
             @Override
             public void onUsage(int inputTokens, int outputTokens) {
+                lastApiInputTokens = inputTokens;
+                lastApiOutputTokens = outputTokens;
+                lastApiHistorySize = historySizeAtRequest;
                 totalInputTokens.addAndGet(inputTokens);
                 totalOutputTokens.addAndGet(outputTokens);
                 eventBus.fire(new AgentEvent.TokenUsage(
@@ -150,7 +228,8 @@ public class DialogueManager {
             }
         }
 
-        history.add(new Message(Role.USER, "", List.of(), results));
+        List<ToolResult> processedResults = preventOverrunAndSave(results);
+        history.add(new Message(Role.USER, "", List.of(), processedResults));
 
         return new RoundResult(false, pendingToolCalls, textBuilder.toString(),
                 hasUnknown, allPermissionDenied);
@@ -182,6 +261,14 @@ public class DialogueManager {
 
     public List<Message> getHistory() {
         return Collections.unmodifiableList(history);
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public int getContextWindow() {
+        return contextWindow;
     }
 
     // ==================== private ====================
@@ -263,5 +350,246 @@ public class DialogueManager {
         List<T> merged = new ArrayList<>(a);
         merged.addAll(b);
         return Collections.unmodifiableList(merged);
+    }
+
+    public int estimateCurrentTokens() {
+        if (lastApiInputTokens <= 0) {
+            int totalChars = 0;
+            for (Message msg : history) {
+                totalChars += estimateMessageChars(msg);
+            }
+            return (int) Math.ceil(totalChars / contextCharToTokenRatio);
+        }
+
+        int totalChars = 0;
+        if (history.size() > lastApiHistorySize + 1) {
+            for (int i = lastApiHistorySize + 1; i < history.size(); i++) {
+                totalChars += estimateMessageChars(history.get(i));
+            }
+        }
+        return lastApiInputTokens + lastApiOutputTokens + (int) Math.ceil(totalChars / contextCharToTokenRatio);
+    }
+
+    int estimateMessageChars(Message msg) {
+        int chars = 0;
+        if (msg.content() != null) {
+            chars += msg.content().length();
+        }
+        if (msg.toolCalls() != null) {
+            for (com.bingtangcode.tool.ToolCall tc : msg.toolCalls()) {
+                chars += tc.name().length();
+                chars += tc.id().length();
+                if (tc.parameters() != null) {
+                    chars += tc.parameters().toString().length();
+                }
+            }
+        }
+        if (msg.toolResults() != null) {
+            for (com.bingtangcode.tool.ToolResult tr : msg.toolResults()) {
+                if (tr.content() != null) {
+                    chars += tr.content().length();
+                }
+            }
+        }
+        return chars;
+    }
+
+    List<ToolResult> preventOverrunAndSave(List<ToolResult> results) {
+        if (results == null || results.isEmpty()) {
+            return results;
+        }
+
+        List<ToolResult> processed = new ArrayList<>();
+        boolean[] isSaved = new boolean[results.size()];
+        long[] sizes = new long[results.size()];
+
+        for (int i = 0; i < results.size(); i++) {
+            ToolResult tr = results.get(i);
+            if (tr == null || tr.content() == null) {
+                processed.add(tr);
+                continue;
+            }
+            byte[] bytes = tr.content().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            sizes[i] = bytes.length;
+
+            if (bytes.length > toolResultLimit) {
+                ToolResult newTr = saveAndReplaceResult(tr, bytes.length);
+                processed.add(newTr);
+                isSaved[i] = true;
+            } else {
+                processed.add(tr);
+            }
+        }
+
+        long totalUnsavedSize = 0;
+        for (int i = 0; i < processed.size(); i++) {
+            if (!isSaved[i] && processed.get(i) != null && processed.get(i).content() != null) {
+                totalUnsavedSize += sizes[i];
+            }
+        }
+
+        if (totalUnsavedSize > toolResultTotalLimit) {
+            List<Integer> unsavedIndices = new ArrayList<>();
+            for (int i = 0; i < processed.size(); i++) {
+                if (!isSaved[i] && processed.get(i) != null && processed.get(i).content() != null) {
+                    unsavedIndices.add(i);
+                }
+            }
+            unsavedIndices.sort((a, b) -> Long.compare(sizes[b], sizes[a]));
+
+            for (int idx : unsavedIndices) {
+                if (totalUnsavedSize <= toolResultTotalLimit) {
+                    break;
+                }
+                ToolResult tr = processed.get(idx);
+                ToolResult newTr = saveAndReplaceResult(tr, sizes[idx]);
+                processed.set(idx, newTr);
+                isSaved[idx] = true;
+                totalUnsavedSize -= sizes[idx];
+            }
+        }
+
+        return processed;
+    }
+
+    ToolResult saveAndReplaceResult(ToolResult tr, long originalSize) {
+        String toolCallId = tr.toolCallId();
+        if (toolCallId == null || toolCallId.isBlank()) {
+            toolCallId = "unknown-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        }
+
+        java.nio.file.Path dir = java.nio.file.Paths.get(".bingtangcode", "sessions", sessionId, "tool-results");
+        java.nio.file.Path file = dir.resolve(toolCallId);
+
+        try {
+            java.nio.file.Files.createDirectories(dir);
+            java.nio.file.Files.writeString(file, tr.content(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            System.err.println("[错误] 无法保存工具执行结果到文件: " + e.getMessage());
+            return tr;
+        }
+
+        String absolutePath = file.toAbsolutePath().toString();
+        String headerPreview = getHeaderPreview(tr.content());
+
+        String replacedContent = "[工具执行结果过大已落盘保护]\n" +
+                "原始大小: " + originalSize + " 字节\n" +
+                "保存路径: " + absolutePath + "\n" +
+                "重读提示: 如果需要阅读该文件的完整内容，请显式使用 ReadFile 工具重新读取对应路径，不要依赖本预览。\n\n" +
+                "头部预览内容如下:\n" +
+                "--------------------------------------\n" +
+                headerPreview + "\n" +
+                "--------------------------------------";
+
+        return new ToolResult(tr.toolCallId(), replacedContent, tr.isError());
+    }
+
+    private String getHeaderPreview(String content) {
+        if (content == null || content.isEmpty()) {
+            return "";
+        }
+        String[] lines = content.split("\\r?\\n", toolResultPreviewLines + 2);
+        StringBuilder sb = new StringBuilder();
+        int lineCount = Math.min(lines.length, toolResultPreviewLines);
+        for (int i = 0; i < lineCount; i++) {
+            sb.append(lines[i]);
+            if (i < lineCount - 1) {
+                sb.append("\n");
+            }
+        }
+        String linePreview = sb.toString();
+
+        int byteLen = 0;
+        int charIndex = 0;
+        while (charIndex < linePreview.length()) {
+            int codePoint = linePreview.codePointAt(charIndex);
+            int charCount = Character.charCount(codePoint);
+            int cpByteLen = new String(Character.toChars(codePoint)).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (byteLen + cpByteLen > toolResultPreviewLimit) {
+                break;
+            }
+            byteLen += cpByteLen;
+            charIndex += charCount;
+        }
+        return linePreview.substring(0, charIndex);
+    }
+
+    public synchronized void compressHistory(LLMProvider provider, boolean manual) throws Exception {
+        if (!manual && !autoCompressEnabled) {
+            return;
+        }
+
+        int keepCount = 0;
+        int keepChars = 0;
+        int lastIndexToKeep = history.size() - 1;
+
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Message msg = history.get(i);
+            if (msg.role() == Role.SYSTEM) {
+                break;
+            }
+            keepCount++;
+            keepChars += estimateMessageChars(msg);
+            lastIndexToKeep = i;
+
+            double keepTokens = keepChars / contextCharToTokenRatio;
+            if (keepTokens >= contextKeepRecentTokens && keepCount >= contextKeepRecentMessages) {
+                break;
+            }
+        }
+
+        if (lastIndexToKeep <= 1) {
+            return;
+        }
+
+        List<Message> historyToSummarize = new ArrayList<>(history.subList(1, lastIndexToKeep));
+
+        try {
+            System.out.println("\n[系统] 正在进行对话历史压缩...");
+            long start = System.currentTimeMillis();
+
+            String summary = ContextCompressor.generateSummary(provider, historyToSummarize);
+
+            String boundaryReminder = "\n\n📖 重要提示：\n" +
+                    "- 需要文件原文时，请使用 ReadFile 工具重新读取对应路径\n" +
+                    "- 需要错误原文或用户原话时，请追溯摘要中的记录或重新读取\n" +
+                    "- 不要依据摘要内容做猜测性补全，摘要仅作为索引而非精确原文";
+
+            String mergedContent = summary + boundaryReminder;
+            Message summaryMsg = new Message(Role.USER, mergedContent);
+
+            List<Message> newHistory = new ArrayList<>();
+            newHistory.add(history.get(0)); // system
+            newHistory.add(summaryMsg);
+            newHistory.addAll(history.subList(lastIndexToKeep, history.size()));
+
+            this.history.clear();
+            this.history.addAll(newHistory);
+
+            compressFailureCount = 0;
+            lastApiInputTokens = 0;
+            lastApiOutputTokens = 0;
+            lastApiHistorySize = 0;
+
+            long elapsed = System.currentTimeMillis() - start;
+            System.out.println("[系统] 历史压缩完成，用时 " + elapsed + " ms");
+
+        } catch (Exception e) {
+            compressFailureCount++;
+            System.err.println("[警告] 生成历史摘要失败 (" + compressFailureCount + "/" + contextMaxCompressFailures + "): " + e.getMessage());
+            if (compressFailureCount >= contextMaxCompressFailures) {
+                autoCompressEnabled = false;
+                System.err.println("[熔断] 摘要连续失败 " + contextMaxCompressFailures + " 次，已关闭自动上下文压缩。");
+            }
+            throw e;
+        }
+    }
+
+    public int getContextSummaryReserve() {
+        return contextSummaryReserve;
+    }
+
+    public int getContextManualCompressMargin() {
+        return contextManualCompressMargin;
     }
 }

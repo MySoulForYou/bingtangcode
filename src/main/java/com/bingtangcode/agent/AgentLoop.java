@@ -16,8 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class AgentLoop implements PermissionModeProvider {
 
-    private static final int MAX_STREAM_RETRIES = 3;
-
     private final DialogueManager dialogue;
     private final LLMProvider provider;
     private final ToolRegistry toolRegistry;
@@ -25,16 +23,36 @@ public class AgentLoop implements PermissionModeProvider {
     private final int maxIterations;
     private final SystemReminderManager reminderManager;
 
-    private static final int MAX_PERMISSION_DENIED_STREAK = 5;
+    private final int maxStreamRetries;
+    private final int maxPermissionDeniedStreak;
 
     private PermissionMode mode = PermissionMode.DEFAULT;
     private volatile boolean cancelled;
     private int unknownToolStreak;
     private int permissionDeniedStreak;
 
+    // 接收 ConfigManager 的构造函数，方便主流程注入
+    public AgentLoop(DialogueManager dialogue, LLMProvider provider,
+                     ToolRegistry toolRegistry, EventBus bus, int maxIterations,
+                     SystemReminderManager reminderManager, PermissionMode initialMode,
+                     com.bingtangcode.config.ConfigManager config) {
+        this(dialogue, provider, toolRegistry, bus, maxIterations, reminderManager, initialMode,
+             config.getAgentMaxStreamRetries(), config.getAgentMaxPermissionDeniedStreak());
+    }
+
+    // 保留旧构造函数，保障测试兼容性
     public AgentLoop(DialogueManager dialogue, LLMProvider provider,
                      ToolRegistry toolRegistry, EventBus bus, int maxIterations,
                      SystemReminderManager reminderManager, PermissionMode initialMode) {
+        this(dialogue, provider, toolRegistry, bus, maxIterations, reminderManager, initialMode,
+             3, 5);
+    }
+
+    // 全参数构造函数
+    public AgentLoop(DialogueManager dialogue, LLMProvider provider,
+                     ToolRegistry toolRegistry, EventBus bus, int maxIterations,
+                     SystemReminderManager reminderManager, PermissionMode initialMode,
+                     int maxStreamRetries, int maxPermissionDeniedStreak) {
         this.dialogue = dialogue;
         this.provider = provider;
         this.toolRegistry = toolRegistry;
@@ -42,6 +60,8 @@ public class AgentLoop implements PermissionModeProvider {
         this.maxIterations = maxIterations;
         this.reminderManager = reminderManager;
         this.mode = initialMode;
+        this.maxStreamRetries = maxStreamRetries;
+        this.maxPermissionDeniedStreak = maxPermissionDeniedStreak;
     }
 
     public void run(String userInput) {
@@ -94,7 +114,7 @@ public class AgentLoop implements PermissionModeProvider {
 
             if (result.allPermissionDenied()) {
                 permissionDeniedStreak++;
-                if (permissionDeniedStreak >= MAX_PERMISSION_DENIED_STREAK) {
+                if (permissionDeniedStreak >= maxPermissionDeniedStreak) {
                     bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.PERMISSION_DENIED_LOOP));
                     return;
                 }
@@ -140,11 +160,11 @@ public class AgentLoop implements PermissionModeProvider {
     }
 
     private RoundResult runRoundWithRetry(AtomicInteger totalInput, AtomicInteger totalOutput) {
-        for (int attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+        for (int attempt = 0; attempt <= maxStreamRetries; attempt++) {
             try {
                 return dialogue.doRound(provider, selectTools(), bus, totalInput, totalOutput);
             } catch (Exception e) {
-                if (cancelled || attempt >= MAX_STREAM_RETRIES) {
+                if (cancelled || attempt >= maxStreamRetries) {
                     return null;
                 }
                 try {
@@ -156,5 +176,21 @@ public class AgentLoop implements PermissionModeProvider {
             }
         }
         return null;
+    }
+
+    public void manualCompress() {
+        int currentEstimate = dialogue.estimateCurrentTokens();
+        int threshold = dialogue.getContextWindow() - dialogue.getContextSummaryReserve() - dialogue.getContextManualCompressMargin();
+
+        System.out.println("\n[系统] 当前估算 Token: " + currentEstimate + "，手动压缩阈值: " + threshold);
+        if (currentEstimate < threshold) {
+            System.out.println("[系统] 当前估算 Token 未达到手动压缩阈值，但将强行执行压缩...");
+        }
+
+        try {
+            dialogue.compressHistory(provider, true);
+        } catch (Exception e) {
+            System.err.println("[系统错误] 手动历史压缩失败: " + e.getMessage());
+        }
     }
 }

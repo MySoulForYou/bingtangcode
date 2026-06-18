@@ -15,16 +15,18 @@ public class McpToolAdapter implements Tool {
     private final String parametersSchema;
     private final boolean readOnly;
     private final McpSession session;
+    private final long timeoutSeconds;
     private final ObjectMapper mapper = new ObjectMapper();
     
     // 一次性警告记录器，针对每个工具的非文本内容丢弃进行告警
     private final Map<String, Boolean> warnedNonText = new ConcurrentHashMap<>();
 
-    private McpToolAdapter(String serverName, String remoteName, String fullName, JsonNode toolNode, McpSession session) {
+    private McpToolAdapter(String serverName, String remoteName, String fullName, JsonNode toolNode, McpSession session, long timeoutSeconds) {
         this.serverName = serverName;
         this.remoteName = remoteName;
         this.fullName = fullName;
         this.session = session;
+        this.timeoutSeconds = timeoutSeconds;
 
         // 描述处理
         String desc = toolNode.has("description") ? toolNode.get("description").asText() : "";
@@ -55,17 +57,18 @@ public class McpToolAdapter implements Tool {
         this.readOnly = ro;
     }
 
-    /**
-     * 静态工厂方法，包含名称的正则校验
-     */
     public static McpToolAdapter create(String serverName, JsonNode toolNode, McpSession session) {
+        return create(serverName, toolNode, session, 30);
+    }
+
+    public static McpToolAdapter create(String serverName, JsonNode toolNode, McpSession session, long timeoutSeconds) {
         String rName = toolNode.get("name").asText();
         String fName = "mcp__" + serverName + "__" + rName;
         if (!fName.matches("^[A-Za-z0-9_-]+$")) {
             System.err.println("[警告] 工具名称 " + fName + " 含有非法字符，已跳过注册");
             return null;
         }
-        return new McpToolAdapter(serverName, rName, fName, toolNode, session);
+        return new McpToolAdapter(serverName, rName, fName, toolNode, session, timeoutSeconds);
     }
 
     @Override
@@ -86,8 +89,8 @@ public class McpToolAdapter implements Tool {
     @Override
     public ToolResult execute(Map<String, Object> params) {
         try {
-            // 工具执行默认 30 秒超时
-            JsonNode result = session.callTool(remoteName, params, 30);
+            // 工具执行超时限制
+            JsonNode result = session.callTool(remoteName, params, timeoutSeconds);
             
             boolean isError = false;
             if (result.has("isError")) {

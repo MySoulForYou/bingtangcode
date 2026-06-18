@@ -129,7 +129,7 @@ public class Main {
             toolRegistry.register(new EditFileTool(projectRoot));
             // 不再需要 Bash 工具的 confirmCommand hook，PermissionGate 统一处理
             toolRegistry.register(new ExecuteCommandTool(projectRoot, null));
-            toolRegistry.register(new FindFilesTool(projectRoot));
+            toolRegistry.register(new FindFilesTool(projectRoot, config.getToolFindFilesMaxResults()));
             toolRegistry.register(new SearchContentTool(projectRoot));
 
             // --- MCP 客户端装配 ---
@@ -161,12 +161,14 @@ public class Main {
             // PermissionGate 在 AgentLoop 之后构造（需要 AgentLoop 作为 modeProvider）
             // 先占位，构造完整后再设置
 
-            // --- 对话管理器（先不用 permissionGate，等构造完再设） ---
             SystemPromptBuilder promptBuilder = new SystemPromptBuilder();
             EnvInfo envInfo = buildEnvInfo(projectRoot);
+            String sessionId = new java.text.SimpleDateFormat("yyyyMMddHHmmss").format(new java.util.Date())
+                    + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
             DialogueManager dialogue = new DialogueManager(
                     promptBuilder.build(providerName, modelName, envInfo),
-                    toolRegistry, toolExecutor, null, toolList);  // permissionGate 稍后注入
+                    toolRegistry, toolExecutor, null, toolList,
+                    sessionId, config);  // permissionGate 稍后注入
 
             // --- 事件总线 ---
             EventBus eventBus = new EventBus();
@@ -176,7 +178,8 @@ public class Main {
             SystemReminderManager reminderManager = new SystemReminderManager();
             AgentLoop agentLoop = new AgentLoop(
                     dialogue, provider, toolRegistry,
-                    eventBus, config.getMaxIterations(), reminderManager, initialMode);
+                    eventBus, config.getMaxIterations(), reminderManager, initialMode,
+                    config);
 
             // --- PermissionGate（依赖 AgentLoop 作为 modeProvider） ---
             PermissionGate permissionGate = new PermissionGate(

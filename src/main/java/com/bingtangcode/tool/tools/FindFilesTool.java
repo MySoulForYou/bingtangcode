@@ -16,12 +16,16 @@ import java.util.Map;
 
 public class FindFilesTool implements Tool {
 
-    private static final int MAX_RESULTS = 200;
-
     private final Path projectRoot;
+    private final int maxResults;
 
     public FindFilesTool(Path projectRoot) {
+        this(projectRoot, 200);
+    }
+
+    public FindFilesTool(Path projectRoot, int maxResults) {
         this.projectRoot = projectRoot;
+        this.maxResults = maxResults;
     }
 
     @Override
@@ -83,8 +87,8 @@ public class FindFilesTool implements Tool {
                 Path name = (file.getParent() != null) ? file : file.getFileName();
                 if (matcher.matches(name.getFileName()) || matcher.matches(normalizedRoot.relativize(file))) {
                     results.add(normalizedRoot.relativize(file).toString());
-                    if (results.size() >= MAX_RESULTS) {
-                        results.add("... (已截断，结果超过 " + MAX_RESULTS + " 条)");
+                    if (results.size() >= maxResults) {
+                        results.add("... (已截断，结果超过 " + maxResults + " 条)");
                         break;
                     }
                 }
