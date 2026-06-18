@@ -77,6 +77,17 @@
 
 ## 当前进度
 
+**v0.7 — 对话上下文管理机制 (当前版本)** 已完成：
+
+| 机制/模块 | 说明 |
+|------|------|
+| 轻量拦截落盘预防 | 工具单项结果过大（默认 >50KB）或本轮累计结果过大（默认 >200KB）时，自动执行本地冷文件落盘并提供精细字节安全预览，阻断 Context 瞬间爆仓 |
+| 历史重量兜底压缩 | 逼近物理窗口上限时自动触发。调用专属 LLM 剥离思考草稿生成 9 部分结构化 Markdown 摘要，无感替换早期冗长历史 |
+| 增量 Token 估算模型 | 混合计算模型：基于上轮 API Usage 回传真实 token 数据作为基准锚点，对增量消息按比率换算累加，规避纯字符累积估算偏差 |
+| 双下界近期原文保留 | 从尾部向前追溯，强制保留至少 10K Token 且消息数 $\ge$ 5 条作为近期记忆原文不被压缩，维系大模型的精准即时上下文精度 |
+| 失败熔断与优雅降级 | 摘要生成连续失败 3 次时自动关闭后台自动压缩，并在前台抛出警告但允许本轮请求照常发送，在网络不佳时实现防死循环优雅降级 |
+| 系统控制参数解耦 | 将上述所有的控制阈值、余量、重试限制、MCP 超时等隐式魔法数解耦并外置至 `config.yaml` 集中管理，提供向下兼容和默认值兜底 |
+
 **v0.6 — MCP 客户端集成** 已完成：
 
 | 模块 | 说明 |
@@ -128,7 +139,7 @@
 
 ### Out of Scope（当前不做）
 
-上下文压缩、对话持久化、工具执行沙箱、跨会话记忆、代码高亮、Markdown 渲染、多会话切换、项目指令文件加载、自动记忆、自动化评估、网络请求限制、资源配额、审计日志
+对话持久化、工具执行沙箱、跨会话记忆、代码高亮、Markdown 渲染、多会话切换、项目指令文件加载、自动记忆、自动化评估、网络请求限制、资源配额、审计日志
 
 ## 快速开始
 
@@ -165,6 +176,16 @@ openai:
   model: gpt-4o
   # endpoint: https://api.openai.com/v1/chat/completions  # 可选，也支持 DeepSeek 等兼容接口
 
+context:
+  window: 128000                 # 物理窗口 Token 限制（默认 128000）
+  # keep_recent_tokens: 10000    # 可选，压缩时最少保留的尾部近期 Token 长度（默认 10000）
+  # keep_recent_messages: 5      # 可选，压缩时最少保留的尾部近期消息数量（默认 5）
+
+tool:
+  timeout_seconds: 30
+  result_limit: 50000            # 单项工具结果落盘阈值（默认 50000 字节）
+  result_total_limit: 200000     # 累计工具结果落盘保护阈值（默认 200000 字节）
+
 agent:
   max_iterations: 20             # Agent Loop 最大迭代次数
 ```
@@ -187,7 +208,7 @@ agent:
 ### 运行
 
 ```bash
-java -jar target/bingtangcode-0.3.0.jar
+java -jar target/bingtangcode-0.7.0.jar
 ```
 
 ### 命令
@@ -198,6 +219,7 @@ java -jar target/bingtangcode-0.3.0.jar
 | `/do` | 切回 Default Mode，全工具可用 |
 | `/mode` | 打开权限模式选择菜单（箭头键选择） |
 | Shift+Tab | 循环切换四档权限模式 |
+| `/compact` | 手动触发对话历史结构化摘要压缩 |
 | `/help` | 显示帮助 |
 | `/clear` | 清除屏幕 |
 | `/exit` 或 `/quit` | 退出 |
@@ -211,10 +233,11 @@ src/main/java/com/bingtangcode/
 │   └── ConfigManager.java       # YAML 配置读取
 ├── core/
 │   ├── SessionManager.java      # REPL 主循环，命令解析，/mode 菜单
-│   ├── DialogueManager.java     # 对话历史 + doRound() 单轮执行 + 权限检查
+│   ├── DialogueManager.java     # 对话历史 + doRound() 单轮执行 + 权限检查 + 预防超限落盘
 │   ├── RoundResult.java         # doRound 返回结果（含 allPermissionDenied）
 │   ├── SystemPromptBuilder.java # 7 模块系统提示组装 + EnvInfo
-│   └── SystemReminderManager.java  # Plan 模式提醒频率控制
+│   ├── SystemReminderManager.java  # Plan 模式提醒频率控制
+│   └── ContextCompressor.java   # 对话历史摘要提取（大模型同步流式处理 + 草稿剥离）
 ├── agent/
 │   ├── AgentLoop.java           # ReAct 循环控制器 + PermissionModeProvider
 │   ├── AgentEvent.java          # 8 种事件类型 + 6 种停止原因
