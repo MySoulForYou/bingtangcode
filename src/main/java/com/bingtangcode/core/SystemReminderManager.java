@@ -1,6 +1,7 @@
 package com.bingtangcode.core;
 
 import com.bingtangcode.permission.PermissionMode;
+import java.nio.file.Path;
 
 public class SystemReminderManager {
 
@@ -13,6 +14,15 @@ public class SystemReminderManager {
     private PermissionMode currentMode = PermissionMode.DEFAULT;
     private int roundCount = 0;
     private boolean firstRound = false;
+    private String loadedInstructions = "";
+
+    public void loadInstructions(Path projectRoot) {
+        this.loadedInstructions = InstructionLoader.loadInstructions(projectRoot);
+    }
+
+    public String getLoadedInstructions() {
+        return this.loadedInstructions;
+    }
 
     public void onModeSwitch(PermissionMode mode) {
         this.currentMode = mode;

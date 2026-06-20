@@ -45,6 +45,7 @@ public class DialogueManager {
     private final ToolExecutor toolExecutor;
     private volatile PermissionGate permissionGate;
     private final ExecutorService batchExecutor;
+    private final SessionPersister sessionPersister;
 
     int lastApiInputTokens = 0;
     int lastApiOutputTokens = 0;
@@ -98,8 +99,17 @@ public class DialogueManager {
         this.contextCharToTokenRatio = contextCharToTokenRatio;
         this.toolResultPreviewLimit = toolResultPreviewLimit;
         this.toolResultPreviewLines = toolResultPreviewLines;
+        this.sessionPersister = new SessionPersister(java.nio.file.Paths.get("").toAbsolutePath());
         this.history = new ArrayList<>();
-        this.history.add(new Message(Role.SYSTEM, systemPrompt));
+        Message sysMsg = new Message(Role.SYSTEM, systemPrompt);
+        this.history.add(sysMsg);
+        try {
+            java.nio.file.Path sessionFile = java.nio.file.Paths.get("").toAbsolutePath()
+                    .resolve(".bingtangcode").resolve("sessions").resolve(sessionId + ".jsonl");
+            if (!java.nio.file.Files.exists(sessionFile)) {
+                sessionPersister.appendMessage(sessionId, sysMsg);
+            }
+        } catch (Exception ignored) {}
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.permissionGate = permissionGate;
@@ -115,11 +125,14 @@ public class DialogueManager {
     }
 
     public void addUserMessage(String content) {
-        history.add(new Message(Role.USER, content));
+        Message msg = new Message(Role.USER, content);
+        history.add(msg);
+        sessionPersister.appendMessage(sessionId, msg);
     }
 
     public void addMessage(Message message) {
         history.add(message);
+        sessionPersister.appendMessage(sessionId, message);
     }
 
     /**
@@ -202,7 +215,9 @@ public class DialogueManager {
         }
 
         if (pendingToolCalls.isEmpty()) {
-            history.add(new Message(Role.ASSISTANT, textBuilder.toString()));
+            Message msg = new Message(Role.ASSISTANT, textBuilder.toString());
+            history.add(msg);
+            sessionPersister.appendMessage(sessionId, msg);
             return RoundResult.COMPLETED;
         }
 
@@ -214,7 +229,9 @@ public class DialogueManager {
             }
         }
 
-        history.add(new Message(Role.ASSISTANT, textBuilder.toString(), pendingToolCalls, List.of()));
+        Message assistantMsg = new Message(Role.ASSISTANT, textBuilder.toString(), pendingToolCalls, List.of());
+        history.add(assistantMsg);
+        sessionPersister.appendMessage(sessionId, assistantMsg);
         List<ToolResult> results = executeToolBatch(pendingToolCalls, eventBus);
 
         // 检查是否本轮所有工具调用都被权限拒绝
@@ -229,7 +246,9 @@ public class DialogueManager {
         }
 
         List<ToolResult> processedResults = preventOverrunAndSave(results);
-        history.add(new Message(Role.USER, "", List.of(), processedResults));
+        Message userResultMsg = new Message(Role.USER, "", List.of(), processedResults);
+        history.add(userResultMsg);
+        sessionPersister.appendMessage(sessionId, userResultMsg);
 
         return new RoundResult(false, pendingToolCalls, textBuilder.toString(),
                 hasUnknown, allPermissionDenied);
@@ -260,7 +279,12 @@ public class DialogueManager {
     }
 
     public List<Message> getHistory() {
-        return Collections.unmodifiableList(history);
+        return history; // Return mutable history so it can be cleared/manipulated during recovery/testing
+    }
+
+    public void restoreHistory(List<Message> restoredHistory) {
+        this.history.clear();
+        this.history.addAll(restoredHistory);
     }
 
     public String getSessionId() {
@@ -591,5 +615,9 @@ public class DialogueManager {
 
     public int getContextManualCompressMargin() {
         return contextManualCompressMargin;
+    }
+
+    public double getContextCharToTokenRatio() {
+        return contextCharToTokenRatio;
     }
 }

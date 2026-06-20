@@ -3,6 +3,7 @@ package com.bingtangcode.agent;
 import com.bingtangcode.core.DialogueManager;
 import com.bingtangcode.core.RoundResult;
 import com.bingtangcode.core.SystemReminderManager;
+import com.bingtangcode.core.AutoMemoryCollector;
 import com.bingtangcode.llm.LLMProvider;
 import com.bingtangcode.llm.Message;
 import com.bingtangcode.llm.Role;
@@ -97,6 +98,7 @@ public class AgentLoop implements PermissionModeProvider {
             reminderManager.onRoundComplete();
 
             if (result.completed()) {
+                AutoMemoryCollector.triggerAsyncMemoryCollection(provider, dialogue.getHistory(), java.nio.file.Paths.get("").toAbsolutePath());
                 bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.COMPLETED));
                 return;
             }

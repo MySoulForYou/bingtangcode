@@ -77,7 +77,18 @@
 
 ## 当前进度
 
-**v0.7 — 对话上下文管理机制 (当前版本)** 已完成：
+**v0.8 — 记忆系统与历史会话持久化 (当前版本)** 已完成：
+
+| 机制/模块 | 说明 |
+|------|------|
+| 多层指令拼接与沙箱 | 支持项目根目录、项目本地（.bingtangcode/）和用户目录（~/.bingtangcode/）下 `BINGTANGCODE.md` 动态拼接。限制 5 层嵌套与环路死锁检测，设立绝对路径沙箱防目录逃逸 |
+| 会话 WAL 追加落盘 | 以 $O(1)$ 磁盘追加写（WAL）格式将 Message 实时记录于 `.jsonl` 文件。支持无元数据文件的高效会话列表加载与时间戳/首条 User 消息标题计算 |
+| 一致性校验与回滚 | 读档时自动过滤坏行。通过 `validateMessageChain` 自动检测并剔除尾部悬挂（未闭合）的工具调用，避免云端 API 请求报错 |
+| 6 小时长暂停提示 | 检测到相邻消息时间戳间隔 $\ge$ 6 小时，自动在内存中向大模型历史上下文注入一条带有明确暂停时长的系统时效性警告提示 |
+| 30 天过期自动清理 | 启动时异步扫描清理 30 天前的 `.jsonl` 历史文件与相关的外部大工具结果保护目录，节约磁盘空间 |
+| 异步记忆沉淀索引 | 对话结束后由后台线程异步调用 LLM 提炼用户偏好、纠正反馈、项目知识、参考资料四类笔记，自维护 200 行以内的 `MEMORY.md` 索引与记忆碎片 |
+
+**v0.7 — 对话上下文管理机制** 已完成：
 
 | 机制/模块 | 说明 |
 |------|------|
@@ -139,7 +150,7 @@
 
 ### Out of Scope（当前不做）
 
-对话持久化、工具执行沙箱、跨会话记忆、代码高亮、Markdown 渲染、多会话切换、项目指令文件加载、自动记忆、自动化评估、网络请求限制、资源配额、审计日志
+工具执行沙箱、代码高亮、Markdown 渲染、自动化评估、网络请求限制、资源配额、审计日志
 
 ## 快速开始
 
@@ -208,7 +219,7 @@ agent:
 ### 运行
 
 ```bash
-java -jar target/bingtangcode-0.7.0.jar
+java -jar target/bingtangcode-0.8.0.jar
 ```
 
 ### 命令
@@ -237,7 +248,12 @@ src/main/java/com/bingtangcode/
 │   ├── RoundResult.java         # doRound 返回结果（含 allPermissionDenied）
 │   ├── SystemPromptBuilder.java # 7 模块系统提示组装 + EnvInfo
 │   ├── SystemReminderManager.java  # Plan 模式提醒频率控制
-│   └── ContextCompressor.java   # 对话历史摘要提取（大模型同步流式处理 + 草稿剥离）
+│   ├── ContextCompressor.java   # 对话历史摘要提取（大模型同步流式处理 + 草稿剥离）
+│   ├── InstructionLoader.java   # 多层级静态指令加载与沙箱隔离
+│   ├── SessionSerializer.java   # 会话记录的 JSONL 序列化与反序列化转换
+│   ├── SessionPersister.java    # 会话 WAL 追加写入与 30 天过期清理
+│   ├── SessionRecovery.java     # 会话坏行跳过、工具链一致性校验与长暂停注入
+│   └── AutoMemoryCollector.java # 异步记忆收集器与 MEMORY.md 索引维护
 ├── agent/
 │   ├── AgentLoop.java           # ReAct 循环控制器 + PermissionModeProvider
 │   ├── AgentEvent.java          # 8 种事件类型 + 6 种停止原因
