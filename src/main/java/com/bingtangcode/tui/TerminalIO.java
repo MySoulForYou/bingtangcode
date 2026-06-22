@@ -13,12 +13,33 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import com.bingtangcode.command.UIController;
+import com.bingtangcode.agent.AgentLoop;
+import com.bingtangcode.permission.PermissionGate;
+import com.bingtangcode.permission.PermissionMode;
 
-public class TerminalIO {
+public class TerminalIO implements UIController {
+
+    private AgentLoop agentLoop;
+    private PermissionGate permissionGate;
+    private com.bingtangcode.command.CommandRegistry commandRegistry;
+
+    public void setAgentLoop(AgentLoop agentLoop) {
+        this.agentLoop = agentLoop;
+    }
+
+    public void setPermissionGate(PermissionGate permissionGate) {
+        this.permissionGate = permissionGate;
+    }
+
+    public void setCommandRegistry(com.bingtangcode.command.CommandRegistry registry) {
+        this.commandRegistry = registry;
+    }
 
     private static final String RESET = "\033[0m";
     private static final String GRAY = "\033[90m";
@@ -70,7 +91,23 @@ public class TerminalIO {
             this.reader = LineReaderBuilder.builder()
                     .terminal(terminal)
                     .variable(LineReader.HISTORY_FILE, HISTORY_PATH)
+                    .completer((reader1, line, candidates) -> {
+                        if (commandRegistry == null) return;
+                        String word = line.word();
+                        if (word != null && word.startsWith("/")) {
+                            List<String> matches = commandRegistry.complete(word);
+                            for (String match : matches) {
+                                com.bingtangcode.command.Command cmd = commandRegistry.find(match.substring(1));
+                                String desc = (cmd != null) ? cmd.getDescription() : "";
+                                candidates.add(new org.jline.reader.Candidate(
+                                    match, match, null, desc, null, null, true
+                                ));
+                            }
+                        }
+                    })
                     .build();
+            this.reader.setOpt(LineReader.Option.AUTO_MENU);
+            this.reader.setOpt(LineReader.Option.AUTO_LIST);
         } catch (IOException e) {
             throw new RuntimeException("无法初始化终端: " + e.getMessage(), e);
         }
@@ -284,12 +321,6 @@ public class TerminalIO {
                 continue;
             }
 
-            if (trimmedFirst.startsWith("/") && handleLocalCommand(trimmedFirst)) {
-                System.out.print("\033[J");
-                drawInputBottom();
-                continue;
-            }
-
             System.out.print("\033[J");
             drawInputBottom();
             // / 开头的本地命令不发 API，不估 token
@@ -497,6 +528,94 @@ public class TerminalIO {
         } catch (Exception e) {
             return "NONE";
         }
+    }
+
+    public void syncModeLabel() {
+        if (agentLoop == null) return;
+        PermissionMode mode = agentLoop.getMode();
+        String label = modeLabel(mode);
+        String color = switch (mode) {
+            case PLAN ->                     "\033[33m";
+            case BYPASS_PERMISSIONS ->       "\033[31m";
+            case ACCEPT_EDITS ->             "\033[36m";
+            default ->                       "\033[90m";
+        };
+        this.setPromptModeLabel(color + label + RESET);
+    }
+
+    public void printModeSwitch(String desc) {
+        System.out.println();
+        System.out.println(GRAY + "  ~ " + desc + RESET);
+        syncModeLabel();
+        this.drawStatusBar();
+    }
+
+    private static String modeLabel(PermissionMode mode) {
+        return switch (mode) {
+            case DEFAULT -> "Default";
+            case ACCEPT_EDITS -> "AcceptEdits";
+            case PLAN -> "Plan";
+            case BYPASS_PERMISSIONS -> "Bypass";
+        };
+    }
+
+    @Override
+    public void addSystemMessage(String text) {
+        System.out.println(GRAY + "  " + text + RESET);
+    }
+
+    @Override
+    public void sendUserMessage(String text) {
+        System.out.println(CLAUDE_CORAL + "❯ " + RESET + text);
+        if (agentLoop != null) {
+            agentLoop.run(text);
+        }
+    }
+
+    @Override
+    public void setPlanMode(boolean enabled) {
+        PermissionMode newMode = enabled ? PermissionMode.PLAN : PermissionMode.DEFAULT;
+        if (agentLoop != null) {
+            agentLoop.setMode(newMode);
+        }
+        if (permissionGate != null) {
+            permissionGate.setMode(newMode);
+        }
+        syncModeLabel();
+        printModeSwitch(modeLabel(newMode) + " Mode");
+    }
+
+    @Override
+    public int getSessionInputTokens() {
+        return agentLoop != null ? agentLoop.getSessionInputTokens() : 0;
+    }
+
+    @Override
+    public int getSessionOutputTokens() {
+        return agentLoop != null ? agentLoop.getSessionOutputTokens() : 0;
+    }
+
+    @Override
+    public int getSessionRoundCount() {
+        return agentLoop != null ? agentLoop.getSessionRoundCount() : 0;
+    }
+
+    @Override
+    public void refreshStatus() {
+        syncModeLabel();
+        drawStatusBar();
+    }
+
+    @Override
+    public void clearScreen() {
+        System.out.print("\033[H\033[2J");
+        System.out.flush();
+    }
+
+    @Override
+    public int selectFromList(String title, List<String> items, int defaultIndex) {
+        com.bingtangcode.command.ActionListBox listBox = new com.bingtangcode.command.ActionListBox(this);
+        return listBox.select(title, items, defaultIndex);
     }
 
     public void shutdown() {

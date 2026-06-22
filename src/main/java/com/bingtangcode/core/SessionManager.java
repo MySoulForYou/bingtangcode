@@ -20,13 +20,19 @@ public class SessionManager {
     private final AgentLoop agentLoop;
     private final PermissionGate permissionGate;
     private final Runnable cancelAction;
+    private final com.bingtangcode.command.CommandRegistry registry;
+    private final com.bingtangcode.config.ConfigManager config;
 
     public SessionManager(TerminalIO terminalIO, AgentLoop agentLoop,
-                          PermissionGate permissionGate, Runnable cancelAction) {
+                          PermissionGate permissionGate, Runnable cancelAction,
+                          com.bingtangcode.command.CommandRegistry registry,
+                          com.bingtangcode.config.ConfigManager config) {
         this.terminalIO = terminalIO;
         this.agentLoop = agentLoop;
         this.permissionGate = permissionGate;
         this.cancelAction = cancelAction;
+        this.registry = registry;
+        this.config = config;
     }
 
     public void start() {
@@ -48,32 +54,59 @@ public class SessionManager {
             }
 
             input = input.trim();
-
-            if ("/exit".equals(input) || "/quit".equals(input)) {
-                break;
-            }
             if (input.isEmpty()) {
                 continue;
             }
 
-            if ("/plan".equals(input)) {
-                applyMode(PermissionMode.PLAN);
-                syncModeLabel();
-                printModeSwitch("Plan Mode，仅可用只读工具");
-                continue;
-            }
-            if ("/do".equals(input)) {
-                applyMode(PermissionMode.DEFAULT);
-                syncModeLabel();
-                printModeSwitch("Default Mode，全工具可用");
-                continue;
-            }
-            if ("/mode".equals(input)) {
-                showModeMenu();
-                continue;
-            }
-            if ("/compact".equals(input)) {
-                agentLoop.manualCompress();
+            // 命令拦截与分流
+            if (input.startsWith("/")) {
+                String name;
+                String args;
+                String commandLine = input.substring(1).trim();
+                int firstSpace = commandLine.indexOf(' ');
+                if (firstSpace == -1) {
+                    name = commandLine.toLowerCase();
+                    args = "";
+                } else {
+                    name = commandLine.substring(0, firstSpace).toLowerCase();
+                    args = commandLine.substring(firstSpace + 1).trim();
+                }
+
+                // 若仅输入了 "/"
+                if (name.isEmpty()) {
+                    com.bingtangcode.command.Command helpCmd = registry.find("help");
+                    if (helpCmd != null) {
+                        try {
+                            com.bingtangcode.command.CommandContext ctx = new com.bingtangcode.command.CommandContext(
+                                    "", terminalIO, agentLoop.getDialogue(), agentLoop, config, registry
+                            );
+                            helpCmd.getHandler().handle(ctx);
+                        } catch (Exception e) {
+                            terminalIO.addSystemMessage("显示帮助卡片失败: " + e.getMessage());
+                        }
+                    }
+                    continue;
+                }
+
+                com.bingtangcode.command.Command cmd = registry.find(name);
+                if (cmd == null) {
+                    terminalIO.addSystemMessage("未知命令: " + name + ", 输入 /help 查看可用命令");
+                    continue;
+                }
+
+                if (args.isEmpty() && !cmd.getArgPrompt().isEmpty()) {
+                    terminalIO.addSystemMessage(cmd.getArgPrompt());
+                    continue;
+                }
+
+                try {
+                    com.bingtangcode.command.CommandContext ctx = new com.bingtangcode.command.CommandContext(
+                            args, terminalIO, agentLoop.getDialogue(), agentLoop, config, registry
+                    );
+                    cmd.getHandler().handle(ctx);
+                } catch (Exception e) {
+                    terminalIO.addSystemMessage("命令执行异常: " + e.getMessage());
+                }
                 continue;
             }
 

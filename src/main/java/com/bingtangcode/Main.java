@@ -128,6 +128,13 @@ public class Main {
             terminalIO.setModelName(modelName);
             terminalIO.setVersion(loadVersion());
 
+            // --- 命令系统装配 ---
+            com.bingtangcode.command.CommandRegistry commandRegistry = new com.bingtangcode.command.CommandRegistry();
+            for (com.bingtangcode.command.Command cmd : com.bingtangcode.command.BuiltInCommands.createBuiltInCommands()) {
+                commandRegistry.register(cmd);
+            }
+            terminalIO.setCommandRegistry(commandRegistry);
+
             // --- 工具系统装配 ---
             ToolRegistry toolRegistry = new ToolRegistry();
             toolRegistry.register(new ReadFileTool(projectRoot));
@@ -290,9 +297,13 @@ public class Main {
             // 回注 permissionGate 到 DialogueManager
             dialogue.setPermissionGate(permissionGate);
 
+            // 回注 agentLoop 和 permissionGate 到 terminalIO
+            terminalIO.setAgentLoop(agentLoop);
+            terminalIO.setPermissionGate(permissionGate);
+
             // --- 启动 ---
             SessionManager session = new SessionManager(
-                    terminalIO, agentLoop, permissionGate, cancelAction);
+                    terminalIO, agentLoop, permissionGate, cancelAction, commandRegistry, config);
             session.start();
 
             // --- 清理 ---

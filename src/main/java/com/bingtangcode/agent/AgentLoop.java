@@ -32,6 +32,21 @@ public class AgentLoop implements PermissionModeProvider {
     private int unknownToolStreak;
     private int permissionDeniedStreak;
 
+    private int sessionInputTokens = 0;
+    private int sessionOutputTokens = 0;
+    private int sessionRoundCount = 0;
+
+    public int getSessionInputTokens() { return sessionInputTokens; }
+    public int getSessionOutputTokens() { return sessionOutputTokens; }
+    public int getSessionRoundCount() { return sessionRoundCount; }
+    public DialogueManager getDialogue() { return dialogue; }
+    public void resetSessionStats() {
+        this.sessionInputTokens = 0;
+        this.sessionOutputTokens = 0;
+        this.sessionRoundCount = 0;
+    }
+
+
     // 接收 ConfigManager 的构造函数，方便主流程注入
     public AgentLoop(DialogueManager dialogue, LLMProvider provider,
                      ToolRegistry toolRegistry, EventBus bus, int maxIterations,
@@ -66,66 +81,72 @@ public class AgentLoop implements PermissionModeProvider {
     }
 
     public void run(String userInput) {
+        sessionRoundCount++;
         dialogue.addUserMessage(userInput);
 
         AtomicInteger totalInputTokens = new AtomicInteger(0);
         AtomicInteger totalOutputTokens = new AtomicInteger(0);
 
-        int iteration = 0;
-        while (iteration < maxIterations) {
-            if (cancelled) {
-                bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.CANCELLED));
-                return;
-            }
-
-            iteration++;
-            long iterStart = System.currentTimeMillis();
-            bus.fire(new AgentEvent.LoopIterationStarted(iteration));
-
-            injectReminder();
-
-            RoundResult result = runRoundWithRetry(totalInputTokens, totalOutputTokens);
-            if (result == null) {
+        try {
+            int iteration = 0;
+            while (iteration < maxIterations) {
                 if (cancelled) {
                     bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.CANCELLED));
+                    return;
+                }
+
+                iteration++;
+                long iterStart = System.currentTimeMillis();
+                bus.fire(new AgentEvent.LoopIterationStarted(iteration));
+
+                injectReminder();
+
+                RoundResult result = runRoundWithRetry(totalInputTokens, totalOutputTokens);
+                if (result == null) {
+                    if (cancelled) {
+                        bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.CANCELLED));
+                    } else {
+                        bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.STREAM_ERROR));
+                    }
+                    return;
+                }
+
+                bus.fire(new AgentEvent.LoopIterationEnded(iteration, System.currentTimeMillis() - iterStart));
+                reminderManager.onRoundComplete();
+
+                if (result.completed()) {
+                    AutoMemoryCollector.triggerAsyncMemoryCollection(provider, dialogue.getHistory(), java.nio.file.Paths.get("").toAbsolutePath());
+                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.COMPLETED));
+                    return;
+                }
+
+                if (result.hasUnknown()) {
+                    unknownToolStreak++;
+                    if (unknownToolStreak >= 3) {
+                        bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.UNKNOWN_TOOL_LOOP));
+                        return;
+                    }
+                    continue;
+                }
+
+                unknownToolStreak = 0;
+
+                if (result.allPermissionDenied()) {
+                    permissionDeniedStreak++;
+                    if (permissionDeniedStreak >= maxPermissionDeniedStreak) {
+                        bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.PERMISSION_DENIED_LOOP));
+                        return;
+                    }
                 } else {
-                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.STREAM_ERROR));
+                    permissionDeniedStreak = 0;
                 }
-                return;
             }
 
-            bus.fire(new AgentEvent.LoopIterationEnded(iteration, System.currentTimeMillis() - iterStart));
-            reminderManager.onRoundComplete();
-
-            if (result.completed()) {
-                AutoMemoryCollector.triggerAsyncMemoryCollection(provider, dialogue.getHistory(), java.nio.file.Paths.get("").toAbsolutePath());
-                bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.COMPLETED));
-                return;
-            }
-
-            if (result.hasUnknown()) {
-                unknownToolStreak++;
-                if (unknownToolStreak >= 3) {
-                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.UNKNOWN_TOOL_LOOP));
-                    return;
-                }
-                continue;
-            }
-
-            unknownToolStreak = 0;
-
-            if (result.allPermissionDenied()) {
-                permissionDeniedStreak++;
-                if (permissionDeniedStreak >= maxPermissionDeniedStreak) {
-                    bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.PERMISSION_DENIED_LOOP));
-                    return;
-                }
-            } else {
-                permissionDeniedStreak = 0;
-            }
+            bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.MAX_ITERATIONS));
+        } finally {
+            this.sessionInputTokens += totalInputTokens.get();
+            this.sessionOutputTokens += totalOutputTokens.get();
         }
-
-        bus.fire(new AgentEvent.AgentFinished(AgentEvent.AgentFinished.MAX_ITERATIONS));
     }
 
     private void injectReminder() {
@@ -153,7 +174,11 @@ public class AgentLoop implements PermissionModeProvider {
         return mode;
     }
 
-    private List<Tool> selectTools() {
+    public LLMProvider getProvider() {
+        return provider;
+    }
+
+    public List<Tool> selectTools() {
         List<Tool> all = toolRegistry.getAll();
         if (mode == PermissionMode.PLAN) {
             return all.stream().filter(Tool::isReadOnly).toList();

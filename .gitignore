@@ -6,3 +6,7 @@ target/
 *.iml
 .bingtangcode/permissions.local.yaml
 .log
+.DS_Store
+.bingtangcode/sessions/
+.bingtangcode/memory/
+dependency-reduced-pom.xml

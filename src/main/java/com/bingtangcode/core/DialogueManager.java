@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class DialogueManager {
 
-    private final String sessionId;
+    private String sessionId;
     private final int contextWindow;
     private final int toolResultLimit;
     private final int toolResultTotalLimit;
@@ -43,6 +43,7 @@ public class DialogueManager {
     private final List<Message> history;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
+    private final List<Tool> tools;
     private volatile PermissionGate permissionGate;
     private final ExecutorService batchExecutor;
     private final SessionPersister sessionPersister;
@@ -112,12 +113,21 @@ public class DialogueManager {
         } catch (Exception ignored) {}
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
+        this.tools = tools != null ? tools : Collections.emptyList();
         this.permissionGate = permissionGate;
         this.batchExecutor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "dialogue-batch-tool");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    public ToolRegistry getToolRegistry() {
+        return toolRegistry;
+    }
+
+    public List<Tool> getTools() {
+        return tools;
     }
 
     public void setPermissionGate(PermissionGate gate) {
@@ -285,6 +295,14 @@ public class DialogueManager {
     public void restoreHistory(List<Message> restoredHistory) {
         this.history.clear();
         this.history.addAll(restoredHistory);
+    }
+
+    public void switchSession(String newSessionId, List<Message> newHistory) {
+        this.sessionId = newSessionId;
+        this.history.clear();
+        if (newHistory != null) {
+            this.history.addAll(newHistory);
+        }
     }
 
     public String getSessionId() {
